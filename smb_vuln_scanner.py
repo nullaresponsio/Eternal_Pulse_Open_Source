@@ -13,12 +13,21 @@ from typing import Dict, List, Optional, Tuple
 # ---------- dependency bootstrap ----------
 
 def _ensure(pkgs: List[str]) -> None:
+    """Install any missing dependency, avoiding --user inside virtualenvs."""
+    in_venv = (
+        hasattr(sys, "real_prefix") or            # old virtualenv
+        sys.prefix != getattr(sys, "base_prefix", sys.prefix)  # venv / pyenv
+    )
     for n in pkgs:
         try:
             importlib.import_module(n.split("[")[0].replace("-", "_"))
         except ImportError:
+            cmd = [sys.executable, "-m", "pip", "install", "--quiet"]
+            if not in_venv:                       # only use --user when *not* in venv
+                cmd.append("--user")
+            cmd.append(n)
             subprocess.call(
-                [sys.executable, "-m", "pip", "install", "--quiet", "--user", n],
+                cmd,
                 env=dict(os.environ, PIP_DISABLE_PIP_VERSION_CHECK="1"),
             )
 
