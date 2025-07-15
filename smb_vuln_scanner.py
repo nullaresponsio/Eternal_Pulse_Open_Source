@@ -1,13 +1,3 @@
-Below is a self-contained, async-capable SMB v2/v3 vulnerability scanner that:
-
-* enumerates dialect, compression, encryption, signing, QUIC, and ksmbd build strings
-* tests for anonymous authentication and weak signing
-* maps the gathered data to the most recent publicly disclosed issues (e.g., SMBGhost / CVE-2020-0796, CVE-2024-43447, ksmbd CVE-2025-37899) and flags probable exposure
-* supports CIDR expansion, per-host rate-limit, jitter, TTL spoofing, and SYN/fragment evasion
-
-(The mapping heuristics come from Microsoft & NVD advisories for CVE-2024-43447 and Netwrix’s SMB v3 analysis ([NVD][1], [Netwrix Blog][2]), plus the ksmbd disclosure ([Upwind][3]).)
-
-```python
 #!/usr/bin/env python3
 # smb_vuln_scanner.py  (rev 2, 2025-07-14)
 
@@ -160,17 +150,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-```
-
-Run it like:
-
-```sh
-python3 smb_vuln_scanner.py 10.0.0.0/24 --rate 64 --jitter 0.2 --evasion syn
-```
-
-The tool prints one JSON object per port with exhaustively gathered attributes and a `vulnerabilities` list, enabling straightforward post-processing or SIEM ingestion.
-
-[1]: https://nvd.nist.gov/vuln/detail/CVE-2024-43447?utm_source=chatgpt.com "CVE-2024-43447 Detail - NVD"
-[2]: https://blog.netwrix.com/smbv3-vulnerability?utm_source=chatgpt.com "SMBv3 Vulnerabilities Explained - Netwrix Blog"
-[3]: https://www.upwind.io/feed/linux-kernel-smb-0-day-vulnerability-cve-2025-37899-uncovered-using-chatgpt-o3?utm_source=chatgpt.com "Linux Kernel SMB 0-Day Vulnerability CVE-2025-37899 Uncovered ..."
