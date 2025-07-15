@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Async SMB v2/v3 vulnerability scanner + self-installer (rev 6, 2025-07-14)
-Now flags non-default shares, suspicious files, and other tell-tale signs of
-backdoor installation in addition to CVE checks.
+Async SMB v2/v3 vulnerability scanner + self-installer (rev 8, 2025-07-15)
+Adds terminal debug prints, continuous loop mode, simple risk-score, and
+new “ack” evasion option for firewall bypass on TCP/445.
 """
 
 import argparse, asyncio, concurrent.futures, json, os, random, re, socket, struct, sys, time
@@ -13,17 +13,16 @@ from typing import Dict, List, Optional, Tuple
 # ---------- dependency bootstrap ----------
 
 def _ensure(pkgs: List[str]) -> None:
-    """Install any missing dependency, avoiding --user inside virtualenvs."""
     in_venv = (
-        hasattr(sys, "real_prefix") or            # old virtualenv
-        sys.prefix != getattr(sys, "base_prefix", sys.prefix)  # venv / pyenv
+        hasattr(sys, "real_prefix") or
+        sys.prefix != getattr(sys, "base_prefix", sys.prefix)
     )
     for n in pkgs:
         try:
             importlib.import_module(n.split("[")[0].replace("-", "_"))
         except ImportError:
             cmd = [sys.executable, "-m", "pip", "install", "--quiet"]
-            if not in_venv:                       # only use --user when *not* in venv
+            if not in_venv:
                 cmd.append("--user")
             cmd.append(n)
             subprocess.call(
@@ -38,10 +37,17 @@ from scapy.all import IP, IPv6, TCP, sr1, conf as _scapy_conf
 _scapy_conf.verb = 0
 import requests
 
-# backdoor patterns (extend as needed)
+# ---------- globals / debug ----------
+
+_DEBUG = False
+def _dbg(msg: str) -> None:
+    if _DEBUG:
+        print(f"[DBG] {msg}", file=sys.stderr)
+
+# ---------- patterns ----------
+
 _BKD_PATTERNS = [
-    re.compile(p, re.I)
-    for p in [
+    re.compile(p, re.I) for p in [
         r"\\?nc(?:64)?\.exe$",
         r"mimikatz.*\.exe$",
         r"reverse.*shell",
@@ -107,16 +113,42 @@ def _syn_probe(dst: str, dport: int, ttl: int | None, frag: bool, timeout: float
             return (ans[TCP].flags & 0x12) == 0x12
     return False
 
+def _ack_probe(dst: str, dport: int, ttl: int | None, timeout: float) -> bool:
+    fam = IPv6 if ":" in dst and not dst.endswith(".") else IP
+    ip_layer = fam(dst=dst, ttl=ttl) if ttl else fam(dst=dst)
+    tcp_layer = TCP(
+        dport=dport,
+        sport=random.randint(1024, 65535),
+        flags="A",
+        seq=random.randrange(2**32),
+        ack=random.randrange(2**32),
+    )
+    ans = _sr1(ip_layer / tcp_layer, timeout, dst)
+    if ans and ans.haslayer(TCP):
+        return (ans[TCP].flags & 0x04) == 0x04  # RST ⇒ unfiltered
+    return False
+
 def _tcp_open(host: str, port: int, timeout: float, evasion: str, ttl: int | None) -> bool:
     try:
         fam = socket.AF_INET6 if ":" in host and not host.endswith(".") else socket.AF_INET
         with socket.socket(fam, socket.SOCK_STREAM) as s:
             s.settimeout(timeout)
             s.connect((host, port))
+            _dbg(f"TCP open {host}:{port}")
             return True
     except Exception:
-        if evasion in ("syn", "frag"):
-            return _syn_probe(host, port, ttl, evasion == "frag", timeout)
+        if evasion == "syn":
+            ok = _syn_probe(host, port, ttl, False, timeout)
+            _dbg(f"SYN probe {host}:{port} -> {ok}")
+            return ok
+        if evasion == "frag":
+            ok = _syn_probe(host, port, ttl, True, timeout)
+            _dbg(f"FRAG probe {host}:{port} -> {ok}")
+            return ok
+        if evasion == "ack":
+            ok = _ack_probe(host, port, ttl, timeout)
+            _dbg(f"ACK probe {host}:{port} -> {ok}")
+            return ok
     return False
 
 def _cap_bits(flags: int) -> List[str]:
@@ -188,6 +220,8 @@ def _analyze(host: str, port: int, conn: SMBConnection):
 
     backdoor_ind = _detect_backdoor(conn)
 
+    risk = 10 * len(vulns) + 5 * len(backdoor_ind)
+
     return dict(
         host=host,
         port=port,
@@ -199,6 +233,7 @@ def _analyze(host: str, port: int, conn: SMBConnection):
         os=os_str,
         vulnerabilities=vulns,
         backdoor_indicators=backdoor_ind,
+        risk_score=risk,
     )
 
 # ---------- scanning coroutine ----------
@@ -216,13 +251,17 @@ async def _scan_host(
     retries: int,
     retry_delay: float,
 ):
+    _dbg(f"Begin host {host}")
     loop = asyncio.get_running_loop()
     open_ports = [
         p
         for p in ports
         if await loop.run_in_executor(None, _tcp_open, host, p, timeout, evasion, ttl)
     ]
+    if not open_ports:
+        _dbg(f"No open ports on {host}")
     for p in open_ports:
+        _dbg(f"Scanning {host}:{p}")
         async with sem:
             if jitter:
                 await asyncio.sleep(random.uniform(0, jitter))
@@ -247,11 +286,13 @@ async def _scan_host(
                         conn.logoff()
                         break
                     except Exception as e:
+                        _dbg(f"Error {host}:{p} -> {e}")
                         print(json.dumps({"host": host, "port": p, "error": str(e)}))
                 else:
                     await asyncio.sleep(retry_delay)
                     continue
                 break
+    _dbg(f"Finished host {host}")
 
 # ---------- installer ----------
 
@@ -318,6 +359,16 @@ async def main_async(args):
         ]
     )
 
+def _configure_logging(level, logfile):
+    handlers = [logging.StreamHandler(sys.stderr)]
+    if logfile:
+        handlers.append(logging.FileHandler(logfile))
+    logging.basicConfig(
+        handlers=handlers,
+        level=level,
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
+
 def main():
     ap = argparse.ArgumentParser(description="Async SMB v2/v3 vulnerability scanner 2025")
     ap.add_argument("targets", nargs="*")
@@ -325,7 +376,7 @@ def main():
     ap.add_argument("--timeout", type=float, default=3.0)
     ap.add_argument("--rate", type=int, default=128)
     ap.add_argument("--jitter", type=float, default=0.0)
-    ap.add_argument("--evasion", choices=["none", "syn", "frag"], default="none")
+    ap.add_argument("--evasion", choices=["none", "syn", "frag", "ack"], default="none")
     ap.add_argument("--ttl", type=int)
     ap.add_argument("--debug", action="store_true")
     ap.add_argument("--log", help="log file path")
@@ -333,7 +384,15 @@ def main():
     ap.add_argument("--retries", type=int, default=3)
     ap.add_argument("--retry-delay", type=float, default=2.0)
     ap.add_argument("--install", metavar="PATH", help="install scanner to PATH")
+    ap.add_argument("--loop", action="store_true", help="repeat scan indefinitely")
+    ap.add_argument("--interval", type=float, default=300.0, help="seconds between loops")
     args = ap.parse_args()
+
+    global _DEBUG
+    _DEBUG = args.debug
+
+    level = logging.DEBUG if args.debug else logging.INFO
+    _configure_logging(level, args.log)
 
     if args.install:
         _install_self(Path(args.install))
@@ -341,16 +400,16 @@ def main():
 
     if not args.targets:
         args.targets = ["scanme.nmap.org"]
-    level = logging.DEBUG if args.debug else logging.INFO
-    logging.basicConfig(
-        filename=args.log,
-        level=level,
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
-    try:
-        asyncio.run(main_async(args))
-    except KeyboardInterrupt:
-        pass
+
+    while True:
+        try:
+            asyncio.run(main_async(args))
+        except KeyboardInterrupt:
+            break
+        if not args.loop:
+            break
+        _dbg(f"Sleeping {args.interval}s before next loop")
+        time.sleep(args.interval)
 
 if __name__ == "__main__":
     main()
