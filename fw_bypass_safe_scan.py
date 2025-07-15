@@ -1,6 +1,3 @@
-Below is a drop-in replacement that (a) auto-installs any missing dependencies, (b) writes every finding to a local JSON-Lines log, and (c) optionally ships each log entry to a central HTTPS endpoint when the environment variables `LOG_SERVER_URL` and `LOG_SERVER_TOKEN` are set.
-
-```python
 #!/usr/bin/env python3
 # fw_bypass_safe_scan.py  (logging edition)
 
@@ -187,23 +184,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-```
-
-**Quick start**
-
-```bash
-python3 -m venv venv
-source venv/bin/activate
-chmod +x fw_bypass_safe_scan.py
-./fw_bypass_safe_scan.py 192.0.2.10 198.51.100.0/30
-```
-
-Optional remote logging:
-
-```bash
-export LOG_SERVER_URL="https://logger.example.com/api/ingest"
-export LOG_SERVER_TOKEN="s3cr3tt0ken"
-./fw_bypass_safe_scan.py targets.txt
-```
-
-Use only on targets you are explicitly authorized to test.
