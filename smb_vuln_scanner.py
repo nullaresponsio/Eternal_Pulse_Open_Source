@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-Async SMB v2/v3 vulnerability scanner + self-installer (rev 5, 2025-07-14)
-Includes auto-relogin, system-wide install, and CVE updates for 2024-2025.
+Async SMB v2/v3 vulnerability scanner + self-installer (rev 6, 2025-07-14)
+Now flags non-default shares, suspicious files, and other tell-tale signs of
+backdoor installation in addition to CVE checks.
 """
-import argparse, asyncio, concurrent.futures, json, math, os, random, re, socket
-import struct, sys, time, importlib, subprocess, ipaddress, logging, shutil, stat, platform
+
+import argparse, asyncio, concurrent.futures, json, os, random, re, socket, struct, sys, time
+import importlib, subprocess, ipaddress, logging, shutil, stat, platform
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -14,14 +16,11 @@ def _ensure(pkgs: List[str]) -> None:
     for n in pkgs:
         try:
             importlib.import_module(n.split("[")[0].replace("-", "_"))
-            logging.debug(f"dependency {n} already installed")
         except ImportError:
-            logging.info(f"installing {n}")
-            rc = subprocess.call(
+            subprocess.call(
                 [sys.executable, "-m", "pip", "install", "--quiet", "--user", n],
                 env=dict(os.environ, PIP_DISABLE_PIP_VERSION_CHECK="1"),
             )
-            logging.debug(f"pip exit code {rc}")
 
 _ensure(["impacket>=0.11.0", "scapy", "requests"])
 
@@ -29,6 +28,22 @@ from impacket.smbconnection import SMBConnection
 from scapy.all import IP, IPv6, TCP, sr1, conf as _scapy_conf
 _scapy_conf.verb = 0
 import requests
+
+# backdoor patterns (extend as needed)
+_BKD_PATTERNS = [
+    re.compile(p, re.I)
+    for p in [
+        r"\\?nc(?:64)?\.exe$",
+        r"mimikatz.*\.exe$",
+        r"reverse.*shell",
+        r"backdoor",
+        r"svchosts?\.exe$",
+        r"taskhost\.exe$",
+        r"wmiexec.*\.py$",
+        r"rdpwrap\.dll$",
+    ]
+]
+_DEFAULT_SHARES = {"ADMIN$", "C$", "IPC$", "PRINT$", "SYSVOL", "NETLOGON"}
 
 # ---------- low-level helpers ----------
 
@@ -49,7 +64,7 @@ def _expand(targets: List[str]) -> List[str]:
 
 def _parse_ports(spec: str | None) -> List[int]:
     if not spec:
-        return [445, 10445]
+        return [445]
     r = []
     for part in spec.split(","):
         if "-" in part:
@@ -66,7 +81,7 @@ def _syn_probe(dst: str, dport: int, ttl: int | None, frag: bool, timeout: float
         dport=dport,
         sport=random.randint(1024, 65535),
         flags="S",
-        seq=random.randrange(2 ** 32),
+        seq=random.randrange(2**32),
     )
     pkt = ip_layer / tcp_layer
     if frag and isinstance(ip_layer, IP):
@@ -89,10 +104,8 @@ def _tcp_open(host: str, port: int, timeout: float, evasion: str, ttl: int | Non
         with socket.socket(fam, socket.SOCK_STREAM) as s:
             s.settimeout(timeout)
             s.connect((host, port))
-            logging.debug(f"{host}:{port} connect OK")
             return True
-    except Exception as e:
-        logging.debug(f"{host}:{port} connect fail: {e}")
+    except Exception:
         if evasion in ("syn", "frag"):
             return _syn_probe(host, port, ttl, evasion == "frag", timeout)
     return False
@@ -110,9 +123,28 @@ def _cap_bits(flags: int) -> List[str]:
     }
     return [n for k, n in m.items() if flags & k]
 
-def _windows_build(os_str: str) -> int:
-    m = re.search(r"\b(\d{4,6})\b", os_str)
-    return int(m.group(1)) if m else 0
+# ---------- backdoor detection ----------
+
+def _detect_backdoor(conn: SMBConnection) -> List[str]:
+    ind: List[str] = []
+    try:
+        shares = [s["shi1_netname"][:-1] for s in conn.listShares()]
+        for sh in shares:
+            if sh.upper() not in _DEFAULT_SHARES:
+                ind.append(f"non-default share: {sh}")
+            try:
+                entries = conn.listPath(sh, "*")
+                for e in entries:
+                    name = getattr(e, "get_longname", lambda: e.get("name", ""))()
+                    if name in (".", ".."):
+                        continue
+                    if any(p.search(name) for p in _BKD_PATTERNS):
+                        ind.append(f"suspicious file: {sh}\\{name}")
+            except Exception:
+                continue
+    except Exception as e:
+        ind.append(f"share enumeration failed: {e}")
+    return ind
 
 # ---------- vulnerability analysis ----------
 
@@ -128,42 +160,36 @@ def _analyze(host: str, port: int, conn: SMBConnection):
 
     vulns: List[str] = []
 
-    # 2024-2025 CVEs
     if d == 0x0311 and comp:
         vulns.append("SMB3 compression RCE (CVE-2024-43447)")
-        vulns.append("SMB3 compression priv-esc (CVE-2024-9142)")
-
     if not sig_ok:
         vulns.append("NTLM hash leak (CVE-2024-43451)")
     if d >= 0x0300 and not enc_caps:
         vulns.append("Info disclosure (CVE-2025-29956)")
-
     if "ksmbd" in os_str.lower() and "linux" in os_str.lower():
         vulns.append("ksmbd LOGOFF UAF (CVE-2025-37899)")
-
     if "windows" in os_str.lower():
         vulns.extend(
             [
                 "SMB DoS (CVE-2024-43642)",
-                "SMB EoP (CVE-2024-26245)",
                 "SMB EoP (CVE-2025-32718)",
                 "SMB EoP (CVE-2025-33073)",
             ]
         )
 
-    return (
-        dict(
-            host=host,
-            port=port,
-            dialect=hex(d),
-            compression=comp,
-            signing=sig_ok,
-            encryption=bool(enc_caps),
-            quic=quic,
-            os=os_str,
-            vulnerabilities=vulns,
-        ),
-        vulns,
+    backdoor_ind = _detect_backdoor(conn)
+
+    return dict(
+        host=host,
+        port=port,
+        dialect=hex(d),
+        compression=comp,
+        signing=sig_ok,
+        encryption=bool(enc_caps),
+        quic=quic,
+        os=os_str,
+        vulnerabilities=vulns,
+        backdoor_indicators=backdoor_ind,
     )
 
 # ---------- scanning coroutine ----------
@@ -182,13 +208,17 @@ async def _scan_host(
     retry_delay: float,
 ):
     loop = asyncio.get_running_loop()
-    open_ports = [p for p in ports if await loop.run_in_executor(None, _tcp_open, host, p, timeout, evasion, ttl)]
+    open_ports = [
+        p
+        for p in ports
+        if await loop.run_in_executor(None, _tcp_open, host, p, timeout, evasion, ttl)
+    ]
     for p in open_ports:
         async with sem:
             if jitter:
                 await asyncio.sleep(random.uniform(0, jitter))
-            for attempt in range(max(1, retries)):
-                for cred in creds_list:
+            for _ in range(max(1, retries)):
+                for user, pw in creds_list:
                     try:
                         conn = SMBConnection(
                             remoteName=host,
@@ -198,35 +228,27 @@ async def _scan_host(
                             timeout=timeout,
                         )
                         try:
-                            conn.login(cred[0], cred[1])
+                            conn.login(user, pw)
                         except Exception:
-                            if cred != ("", ""):
+                            if (user, pw) != ("", ""):
                                 continue
                             conn.login("", "")
-                        info, _ = _analyze(host, p, conn)
+                        info = _analyze(host, p, conn)
                         print(json.dumps(info, separators=(",", ":")))
-                        logging.info(
-                            f"{host}:{p} dialect {info['dialect']} vulns={len(info['vulnerabilities'])}"
-                        )
                         conn.logoff()
-                        break  # success, exit creds loop
+                        break
                     except Exception as e:
-                        err = {"host": host, "port": p, "error": str(e)}
-                        print(json.dumps(err))
-                        logging.error(err)
+                        print(json.dumps({"host": host, "port": p, "error": str(e)}))
                 else:
-                    # all creds failed
                     await asyncio.sleep(retry_delay)
                     continue
-                break  # connection handled, exit retry loop
+                break
 
 # ---------- installer ----------
 
 def _install_self(target: Path):
-    target_parent = target.parent
-    target_parent.mkdir(parents=True, exist_ok=True)
-    script_src = Path(__file__).resolve()
-    shutil.copy2(script_src, target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(Path(__file__).resolve(), target)
     target.chmod(target.stat().st_mode | stat.S_IEXEC)
 
     if platform.system() == "Linux":
@@ -239,8 +261,7 @@ Restart=on-failure
 [Install]
 WantedBy=multi-user.target
 """
-        service_path = Path("/etc/systemd/system/smbscan.service")
-        service_path.write_text(service)
+        Path("/etc/systemd/system/smbscan.service").write_text(service)
         subprocess.call(["systemctl", "daemon-reload"])
         subprocess.call(["systemctl", "enable", "smbscan.service"])
         print("installed systemd unit smbscan.service")
@@ -302,7 +323,7 @@ def main():
     ap.add_argument("--creds", help="credential list file (user:pass per line)")
     ap.add_argument("--retries", type=int, default=3)
     ap.add_argument("--retry-delay", type=float, default=2.0)
-    ap.add_argument("--install", metavar="PATH", help="install scanner to PATH (e.g., /usr/local/bin/smbscan)")
+    ap.add_argument("--install", metavar="PATH", help="install scanner to PATH")
     args = ap.parse_args()
 
     if args.install:
@@ -317,11 +338,10 @@ def main():
         level=level,
         format="%(asctime)s %(levelname)s %(message)s",
     )
-    logging.info("scanner start")
     try:
         asyncio.run(main_async(args))
     except KeyboardInterrupt:
-        logging.info("cancelled by user")
+        pass
 
 if __name__ == "__main__":
     main()
