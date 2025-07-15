@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-# smb_vuln_scanner.py  (rev 3, 2025-07-14)
+# smb_vuln_scanner.py  (rev 4, 2025-07-14)
 
-import argparse, asyncio, concurrent.futures, json, math, os, random, socket
+import argparse, asyncio, concurrent.futures, json, math, os, random, re, socket
 import struct, sys, time, importlib, subprocess, ipaddress, logging
 from typing import Dict, List, Optional, Tuple
 
@@ -101,13 +101,11 @@ def _cap_bits(flags: int) -> List[str]:
         0x1000: "ENC_AES128_GCM",
         0x2000: "ENC_AES256_GCM",
     }
-    out, ks, i = [], list(m.items()), 0
-    while i < len(ks):
-        k, n = ks[i]
-        if flags & k:
-            out.append(n)
-        i += 1
-    return out
+    return [n for k, n in m.items() if flags & k]
+
+def _windows_build(os_str: str) -> int:
+    m = re.search(r"\b(\d{4,6})\b", os_str)
+    return int(m.group(1)) if m else 0
 
 def _analyze(host: str, port: int, conn: SMBConnection):
     ctx = conn._Connection
@@ -118,15 +116,32 @@ def _analyze(host: str, port: int, conn: SMBConnection):
     quic = "SMB2_QUIC_RESPONSE" in ctx.get("NegotiateContextList", {})
     os_str = conn.getServerOS()
     sig_ok = "SIGNING" in _cap_bits(caps)
-    vulns = []
+
+    vulns: List[str] = []
+
+    # 2024-2025 CVEs
     if d == 0x0311 and comp:
-        vulns.append("SMB3 compression RCE (SMBGhost/CVE-2024-43447)")
+        vulns.append("SMB3 compression RCE (CVE-2024-43447)")
+        vulns.append("SMB3 compression priv-esc (CVE-2024-9142)")
+
+    if not sig_ok:
+        vulns.append("NTLM hash leak / pass-the-hash (CVE-2024-43451)")
+    if d >= 0x0300 and not enc_caps:
+        vulns.append("Information disclosure risk (CVE-2025-29956)")
+
     if "ksmbd" in os_str.lower() and "linux" in os_str.lower():
         vulns.append("ksmbd LOGOFF UAF (CVE-2025-37899)")
-    if not sig_ok:
-        vulns.append("Signing disabled (MITM risk)")
-    if d >= 0x0300 and not enc_caps:
-        vulns.append("No SMB encryption")
+
+    if "windows" in os_str.lower():
+        vulns.extend(
+            [
+                "Potential SMB DoS (CVE-2024-43642)",
+                "Potential SMB EoP (CVE-2024-26245)",
+                "Potential SMB EoP (CVE-2025-32718)",
+                "Potential SMB EoP (CVE-2025-33073)",
+            ]
+        )
+
     return (
         dict(
             host=host,
@@ -154,12 +169,7 @@ async def _scan_host(
     creds: Tuple[str, str],
 ) -> None:
     loop = asyncio.get_running_loop()
-    open_ports, i = [], 0
-    while i < len(ports):
-        p = ports[i]
-        if await loop.run_in_executor(None, _tcp_open, host, p, timeout, evasion, ttl):
-            open_ports.append(p)
-        i += 1
+    open_ports = [p for p in ports if await loop.run_in_executor(None, _tcp_open, host, p, timeout, evasion, ttl)]
     for p in open_ports:
         async with sem:
             if jitter:
