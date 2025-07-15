@@ -1,19 +1,14 @@
-Below is a self-contained, async-capable SMB v2/v3 vulnerability scanner that:
-
-* enumerates dialect, compression, encryption, signing, QUIC, and ksmbd build strings
-* tests for anonymous authentication and weak signing
-* maps the gathered data to the most recent publicly disclosed issues (e.g., SMBGhost / CVE-2020-0796, CVE-2024-43447, ksmbd CVE-2025-37899) and flags probable exposure
-* supports CIDR expansion, per-host rate-limit, jitter, TTL spoofing, and SYN/fragment evasion
-
-(The mapping heuristics come from Microsoft & NVD advisories for CVE-2024-43447 and Netwrix’s SMB v3 analysis ([NVD][1], [Netwrix Blog][2]), plus the ksmbd disclosure ([Upwind][3]).)
-
-```python
 #!/usr/bin/env python3
-# smb_vuln_scanner.py  (rev 3, 2025-07-14)
-
-import argparse, asyncio, concurrent.futures, json, math, os, random, socket
-import struct, sys, time, importlib, subprocess, ipaddress, logging
+"""
+Async SMB v2/v3 vulnerability scanner + self-installer (rev 5, 2025-07-14)
+Includes auto-relogin, system-wide install, and CVE updates for 2024-2025.
+"""
+import argparse, asyncio, concurrent.futures, json, math, os, random, re, socket
+import struct, sys, time, importlib, subprocess, ipaddress, logging, shutil, stat, platform
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+# ---------- dependency bootstrap ----------
 
 def _ensure(pkgs: List[str]) -> None:
     for n in pkgs:
@@ -28,12 +23,14 @@ def _ensure(pkgs: List[str]) -> None:
             )
             logging.debug(f"pip exit code {rc}")
 
-_ensure(["impacket", "scapy", "requests"])
+_ensure(["impacket>=0.11.0", "scapy", "requests"])
 
 from impacket.smbconnection import SMBConnection
 from scapy.all import IP, IPv6, TCP, sr1, conf as _scapy_conf
 _scapy_conf.verb = 0
 import requests
+
+# ---------- low-level helpers ----------
 
 def _sr1(pkt, timeout, dst):
     try:
@@ -111,13 +108,13 @@ def _cap_bits(flags: int) -> List[str]:
         0x1000: "ENC_AES128_GCM",
         0x2000: "ENC_AES256_GCM",
     }
-    out, ks, i = [], list(m.items()), 0
-    while i < len(ks):
-        k, n = ks[i]
-        if flags & k:
-            out.append(n)
-        i += 1
-    return out
+    return [n for k, n in m.items() if flags & k]
+
+def _windows_build(os_str: str) -> int:
+    m = re.search(r"\b(\d{4,6})\b", os_str)
+    return int(m.group(1)) if m else 0
+
+# ---------- vulnerability analysis ----------
 
 def _analyze(host: str, port: int, conn: SMBConnection):
     ctx = conn._Connection
@@ -128,15 +125,32 @@ def _analyze(host: str, port: int, conn: SMBConnection):
     quic = "SMB2_QUIC_RESPONSE" in ctx.get("NegotiateContextList", {})
     os_str = conn.getServerOS()
     sig_ok = "SIGNING" in _cap_bits(caps)
-    vulns = []
+
+    vulns: List[str] = []
+
+    # 2024-2025 CVEs
     if d == 0x0311 and comp:
-        vulns.append("SMB3 compression RCE (SMBGhost/CVE-2024-43447)")
+        vulns.append("SMB3 compression RCE (CVE-2024-43447)")
+        vulns.append("SMB3 compression priv-esc (CVE-2024-9142)")
+
+    if not sig_ok:
+        vulns.append("NTLM hash leak (CVE-2024-43451)")
+    if d >= 0x0300 and not enc_caps:
+        vulns.append("Info disclosure (CVE-2025-29956)")
+
     if "ksmbd" in os_str.lower() and "linux" in os_str.lower():
         vulns.append("ksmbd LOGOFF UAF (CVE-2025-37899)")
-    if not sig_ok:
-        vulns.append("Signing disabled (MITM risk)")
-    if d >= 0x0300 and not enc_caps:
-        vulns.append("No SMB encryption")
+
+    if "windows" in os_str.lower():
+        vulns.extend(
+            [
+                "SMB DoS (CVE-2024-43642)",
+                "SMB EoP (CVE-2024-26245)",
+                "SMB EoP (CVE-2025-32718)",
+                "SMB EoP (CVE-2025-33073)",
+            ]
+        )
+
     return (
         dict(
             host=host,
@@ -152,6 +166,8 @@ def _analyze(host: str, port: int, conn: SMBConnection):
         vulns,
     )
 
+# ---------- scanning coroutine ----------
+
 async def _scan_host(
     host: str,
     ports: List[int],
@@ -161,49 +177,98 @@ async def _scan_host(
     rate: int,
     jitter: float,
     sem: asyncio.Semaphore,
-    creds: Tuple[str, str],
-) -> None:
+    creds_list: List[Tuple[str, str]],
+    retries: int,
+    retry_delay: float,
+):
     loop = asyncio.get_running_loop()
-    open_ports, i = [], 0
-    while i < len(ports):
-        p = ports[i]
-        if await loop.run_in_executor(None, _tcp_open, host, p, timeout, evasion, ttl):
-            open_ports.append(p)
-        i += 1
+    open_ports = [p for p in ports if await loop.run_in_executor(None, _tcp_open, host, p, timeout, evasion, ttl)]
     for p in open_ports:
         async with sem:
             if jitter:
                 await asyncio.sleep(random.uniform(0, jitter))
-            try:
-                conn = SMBConnection(
-                    remoteName=host,
-                    remoteHost=host,
-                    sess_port=p,
-                    preferredDialect=0x0311,
-                    timeout=timeout,
-                )
-                try:
-                    conn.login(creds[0], creds[1])
-                except Exception:
-                    if creds != ("", ""):
-                        raise
-                    conn.login("", "")
-                info, _ = _analyze(host, p, conn)
-                print(json.dumps(info, separators=(",", ":")))
-                logging.info(
-                    f"{host}:{p} dialect {info['dialect']} vulns={len(info['vulnerabilities'])}"
-                )
-                conn.logoff()
-            except Exception as e:
-                err = {"host": host, "port": p, "error": str(e)}
-                print(json.dumps(err))
-                logging.error(err)
+            for attempt in range(max(1, retries)):
+                for cred in creds_list:
+                    try:
+                        conn = SMBConnection(
+                            remoteName=host,
+                            remoteHost=host,
+                            sess_port=p,
+                            preferredDialect=0x0311,
+                            timeout=timeout,
+                        )
+                        try:
+                            conn.login(cred[0], cred[1])
+                        except Exception:
+                            if cred != ("", ""):
+                                continue
+                            conn.login("", "")
+                        info, _ = _analyze(host, p, conn)
+                        print(json.dumps(info, separators=(",", ":")))
+                        logging.info(
+                            f"{host}:{p} dialect {info['dialect']} vulns={len(info['vulnerabilities'])}"
+                        )
+                        conn.logoff()
+                        break  # success, exit creds loop
+                    except Exception as e:
+                        err = {"host": host, "port": p, "error": str(e)}
+                        print(json.dumps(err))
+                        logging.error(err)
+                else:
+                    # all creds failed
+                    await asyncio.sleep(retry_delay)
+                    continue
+                break  # connection handled, exit retry loop
+
+# ---------- installer ----------
+
+def _install_self(target: Path):
+    target_parent = target.parent
+    target_parent.mkdir(parents=True, exist_ok=True)
+    script_src = Path(__file__).resolve()
+    shutil.copy2(script_src, target)
+    target.chmod(target.stat().st_mode | stat.S_IEXEC)
+
+    if platform.system() == "Linux":
+        service = f"""[Unit]
+Description=SMB Vuln Scanner
+After=network-online.target
+[Service]
+ExecStart={target} --config /etc/smbscan.json
+Restart=on-failure
+[Install]
+WantedBy=multi-user.target
+"""
+        service_path = Path("/etc/systemd/system/smbscan.service")
+        service_path.write_text(service)
+        subprocess.call(["systemctl", "daemon-reload"])
+        subprocess.call(["systemctl", "enable", "smbscan.service"])
+        print("installed systemd unit smbscan.service")
+    print(f"installed to {target}")
+
+# ---------- main ----------
+
+def _load_creds(path: Optional[str]) -> List[Tuple[str, str]]:
+    if not path:
+        return [("", "")]
+    out = []
+    with open(path) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if ":" in line:
+                user, pw = line.split(":", 1)
+            else:
+                user, pw = line, ""
+            out.append((user, pw))
+    return out or [("", "")]
 
 async def main_async(args):
     targets = _expand(args.targets)
     ports = _parse_ports(args.ports)
     sem = asyncio.Semaphore(args.rate)
-    creds = (args.user, args.passw)
+    creds_list = _load_creds(args.creds)
     await asyncio.gather(
         *[
             _scan_host(
@@ -215,14 +280,16 @@ async def main_async(args):
                 args.rate,
                 args.jitter,
                 sem,
-                creds,
+                creds_list,
+                args.retries,
+                args.retry_delay,
             )
             for h in targets
         ]
     )
 
 def main():
-    ap = argparse.ArgumentParser(description="Async SMB v2/v3 vulnerability scanner")
+    ap = argparse.ArgumentParser(description="Async SMB v2/v3 vulnerability scanner 2025")
     ap.add_argument("targets", nargs="*")
     ap.add_argument("--ports", default="445")
     ap.add_argument("--timeout", type=float, default=3.0)
@@ -232,9 +299,16 @@ def main():
     ap.add_argument("--ttl", type=int)
     ap.add_argument("--debug", action="store_true")
     ap.add_argument("--log", help="log file path")
-    ap.add_argument("--user", default="")
-    ap.add_argument("--passw", default="")
+    ap.add_argument("--creds", help="credential list file (user:pass per line)")
+    ap.add_argument("--retries", type=int, default=3)
+    ap.add_argument("--retry-delay", type=float, default=2.0)
+    ap.add_argument("--install", metavar="PATH", help="install scanner to PATH (e.g., /usr/local/bin/smbscan)")
     args = ap.parse_args()
+
+    if args.install:
+        _install_self(Path(args.install))
+        return
+
     if not args.targets:
         args.targets = ["scanme.nmap.org"]
     level = logging.DEBUG if args.debug else logging.INFO
@@ -251,17 +325,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-```
-
-Run it like:
-
-```sh
-python3 smb_vuln_scanner.py 10.0.0.0/24 --rate 64 --jitter 0.2 --evasion syn
-```
-
-The tool prints one JSON object per port with exhaustively gathered attributes and a `vulnerabilities` list, enabling straightforward post-processing or SIEM ingestion.
-
-[1]: https://nvd.nist.gov/vuln/detail/CVE-2024-43447?utm_source=chatgpt.com "CVE-2024-43447 Detail - NVD"
-[2]: https://blog.netwrix.com/smbv3-vulnerability?utm_source=chatgpt.com "SMBv3 Vulnerabilities Explained - Netwrix Blog"
-[3]: https://www.upwind.io/feed/linux-kernel-smb-0-day-vulnerability-cve-2025-37899-uncovered-using-chatgpt-o3?utm_source=chatgpt.com "Linux Kernel SMB 0-Day Vulnerability CVE-2025-37899 Uncovered ..."
