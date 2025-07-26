@@ -1,139 +1,159 @@
 {
-  "76.223.33.104": {
-    "host": "76.223.33.104",
-    "ports": {
-      "445": {
-        "protocol": "tcp",
-        "state": "filtered",
-        "smb": false
-      },
-      "139": {
-        "protocol": "tcp",
-        "state": "filtered",
-        "smb": false
-      },
-      "135": {
-        "protocol": "tcp",
-        "state": "filtered",
-        "smb": false
-      },
-      "137": {
-        "protocol": "udp",
-        "state": "open|filtered"
-      },
-      "138": {
-        "protocol": "udp",
-        "state": "open|filtered"
-      },
-      "443": {
-        "protocol": "udp",
-        "state": "open|filtered",
-        "quic": false
-      }
-    },
-    "smb_inferred": false,
-    "nbns": false
-  },
-  "23.214.246.3": {
-    "host": "23.214.246.3",
-    "ports": {
-      "445": {
-        "protocol": "tcp",
-        "state": "filtered",
-        "smb": false
-      },
-      "139": {
-        "protocol": "tcp",
-        "state": "filtered",
-        "smb": false
-      },
-      "135": {
-        "protocol": "tcp",
-        "state": "filtered",
-        "smb": false
-      },
-      "137": {
-        "protocol": "udp",
-        "state": "open|filtered"
-      },
-      "138": {
-        "protocol": "udp",
-        "state": "open|filtered"
-      },
-      "443": {
-        "protocol": "udp",
-        "state": "open|filtered",
-        "quic": false
-      }
-    },
-    "smb_inferred": false,
-    "nbns": false
-  },
-  "142.250.80.110": {
-    "host": "142.250.80.110",
-    "ports": {
-      "445": {
-        "protocol": "tcp",
-        "state": "filtered",
-        "smb": false
-      },
-      "139": {
-        "protocol": "tcp",
-        "state": "filtered",
-        "smb": false
-      },
-      "135": {
-        "protocol": "tcp",
-        "state": "filtered",
-        "smb": false
-      },
-      "137": {
-        "protocol": "udp",
-        "state": "open|filtered"
-      },
-      "138": {
-        "protocol": "udp",
-        "state": "open|filtered"
-      },
-      "443": {
-        "protocol": "udp",
-        "state": "open|filtered",
-        "quic": false
-      }
-    },
-    "smb_inferred": false,
-    "nbns": false
-  },
   "13.248.160.110": {
     "host": "13.248.160.110",
     "ports": {
+      "135": {
+        "protocol": "tcp",
+        "state": "error",
+        "smb": false
+      },
+      "80": {
+        "protocol": "tcp",
+        "state": "open",
+        "smb": false
+      },
       "445": {
         "protocol": "tcp",
-        "state": "filtered",
+        "state": "error",
+        "smb": false
+      },
+      "443": {
+        "protocol": "tcp",
+        "state": "open",
         "smb": false
       },
       "139": {
         "protocol": "tcp",
-        "state": "filtered",
+        "state": "error",
         "smb": false
-      },
-      "135": {
-        "protocol": "tcp",
-        "state": "filtered",
-        "smb": false
-      },
-      "137": {
-        "protocol": "udp",
-        "state": "open|filtered"
       },
       "138": {
         "protocol": "udp",
         "state": "open|filtered"
       },
-      "443": {
+      "137": {
         "protocol": "udp",
-        "state": "open|filtered",
-        "quic": false
+        "state": "open|filtered"
+      }
+    },
+    "smb_inferred": false,
+    "nbns": false
+  },
+  "76.223.33.104": {
+    "host": "76.223.33.104",
+    "ports": {
+      "135": {
+        "protocol": "tcp",
+        "state": "error",
+        "smb": false
+      },
+      "80": {
+        "protocol": "tcp",
+        "state": "open",
+        "smb": false
+      },
+      "445": {
+        "protocol": "tcp",
+        "state": "error",
+        "smb": false
+      },
+      "443": {
+        "protocol": "tcp",
+        "state": "open",
+        "smb": false
+      },
+      "139": {
+        "protocol": "tcp",
+        "state": "error",
+        "smb": false
+      },
+      "138": {
+        "protocol": "udp",
+        "state": "open|filtered"
+      },
+      "137": {
+        "protocol": "udp",
+        "state": "open|filtered"
+      }
+    },
+    "smb_inferred": false,
+    "nbns": false
+  },
+  "142.250.81.238": {
+    "host": "142.250.81.238",
+    "ports": {
+      "135": {
+        "protocol": "tcp",
+        "state": "error",
+        "smb": false
+      },
+      "80": {
+        "protocol": "tcp",
+        "state": "open",
+        "smb": false
+      },
+      "445": {
+        "protocol": "tcp",
+        "state": "error",
+        "smb": false
+      },
+      "443": {
+        "protocol": "tcp",
+        "state": "open",
+        "smb": false
+      },
+      "139": {
+        "protocol": "tcp",
+        "state": "error",
+        "smb": false
+      },
+      "138": {
+        "protocol": "udp",
+        "state": "open|filtered"
+      },
+      "137": {
+        "protocol": "udp",
+        "state": "open|filtered"
+      }
+    },
+    "smb_inferred": false,
+    "nbns": false
+  },
+  "23.196.144.211": {
+    "host": "23.196.144.211",
+    "ports": {
+      "135": {
+        "protocol": "tcp",
+        "state": "error",
+        "smb": false
+      },
+      "80": {
+        "protocol": "tcp",
+        "state": "open",
+        "smb": false
+      },
+      "445": {
+        "protocol": "tcp",
+        "state": "error",
+        "smb": false
+      },
+      "443": {
+        "protocol": "tcp",
+        "state": "open",
+        "smb": false
+      },
+      "139": {
+        "protocol": "tcp",
+        "state": "error",
+        "smb": false
+      },
+      "138": {
+        "protocol": "udp",
+        "state": "open|filtered"
+      },
+      "137": {
+        "protocol": "udp",
+        "state": "open|filtered"
       }
     },
     "smb_inferred": false,

@@ -267,6 +267,20 @@ def enumerate_and_print_shares(success, json_out=False, quiet=False):
     if json_out:
         print(json.dumps(share_data, indent=2))
 
+# CIDR expansion helper
+def expand_cidrs(cidrs):
+    """Expand CIDR ranges into individual IP addresses"""
+    expanded = []
+    for cidr in cidrs:
+        try:
+            network = ipaddress.ip_network(cidr, strict=False)
+            # Skip network and broadcast addresses for IPv4
+            for ip in network.hosts() if network.version == 4 else network:
+                expanded.append(str(ip))
+        except ValueError as e:
+            print(f"[ERROR] Invalid CIDR {cidr}: {e}", file=sys.stderr)
+    return expanded
+
 # Main Function
 def main():
     ap = argparse.ArgumentParser(
@@ -374,6 +388,14 @@ def main():
         print("[ERROR] No targets specified. Please provide targets via --host, --cidr, or --input.", file=sys.stderr)
         sys.exit(1)
 
+    # Expand CIDR ranges into individual IP addresses
+    if cidrs:
+        expanded_ips = expand_cidrs(cidrs)
+        if not args.quiet:
+            print(f"[CIDR] Expanded {len(cidrs)} CIDR ranges into {len(expanded_ips)} IPs", file=sys.stderr)
+        hosts.extend(expanded_ips)
+        cidrs = []  # Clear CIDRs since they've been expanded
+
     # Parallel DNS resolution
     resolved = []
     host_map = {}
@@ -453,9 +475,9 @@ def main():
                 print("[SCAN] Using incremental scanning with detailed output", file=sys.stderr)
             
             # We'll manage scanning manually to get per-host results
-            targets = list(scanner._iter_targets(hosts, cidrs))
-            filtered = scanner._filter_targets(targets)
-            ordered = list(scanner._strategy_cls(filtered))
+            targets = hosts  # CIDRs already expanded into hosts
+            filtered = targets  # No additional filtering needed
+            ordered = list(scanner._strategy_cls(filtered)) if hasattr(scanner, '_strategy_cls') else filtered
             scanner._results = {}
             scanner._skipped = []
             
@@ -526,14 +548,14 @@ def main():
                         log_exception(f"Scanning host {host}")
             
             # Get successful routes after manual scan
-            success = scanner.successful_routes()
-            expanded = len(scanner._results) + len(scanner._skipped)
+            success = scanner.successful_routes() if hasattr(scanner, 'successful_routes') else []
+            expanded = len(scanner._results) + len(scanner._skipped) if hasattr(scanner, '_skipped') else len(scanner._results)
         
         else:
-            # Original scanning method
-            scanner.scan(hosts, cidrs, async_mode=args.asyncio)
-            success = scanner.successful_routes()
-            expanded = len(scanner._results) + len(scanner._skipped)
+            # Original scanning method - CIDRs already expanded into hosts
+            scanner.scan(hosts)  # Fixed call - only pass hosts
+            success = scanner.successful_routes() if hasattr(scanner, 'successful_routes') else []
+            expanded = len(scanner._results) + (len(scanner._skipped) if hasattr(scanner, '_skipped') else 0)
             
             if not args.quiet:
                 # Print all results at once
@@ -552,7 +574,7 @@ def main():
         
         if not args.quiet:
             print(f"[SCAN] Completed: {len(scanner._results)} hosts, "
-                  f"{len(success)} successful, {len(scanner._skipped)} skipped")
+                  f"{len(success)} successful, {expanded - len(scanner._results)} skipped")
 
         # Final JSON save (for asyncio mode or small scans)
         if args.save and (args.asyncio or len(hosts) <= 50):
