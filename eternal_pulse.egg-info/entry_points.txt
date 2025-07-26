@@ -1,0 +1,2 @@
+[console_scripts]
+eternal-pulse = eternal_pulse.__main__:main

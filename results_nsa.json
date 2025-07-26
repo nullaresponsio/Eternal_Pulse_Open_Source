@@ -1,0 +1,107 @@
+{
+  "184.25.245.236": {
+    "host": "184.25.245.236",
+    "ports": {
+      "135": {
+        "protocol": "tcp",
+        "state": "filtered",
+        "smb": false
+      },
+      "445": {
+        "protocol": "tcp",
+        "state": "filtered",
+        "smb": false
+      },
+      "139": {
+        "protocol": "tcp",
+        "state": "filtered",
+        "smb": false
+      },
+      "443": {
+        "protocol": "udp",
+        "state": "open|filtered",
+        "quic": false
+      },
+      "137": {
+        "protocol": "udp",
+        "state": "open|filtered"
+      },
+      "138": {
+        "protocol": "udp",
+        "state": "open|filtered"
+      }
+    },
+    "smb_inferred": false,
+    "nbns": false
+  },
+  "13.248.160.110": {
+    "host": "13.248.160.110",
+    "ports": {
+      "135": {
+        "protocol": "tcp",
+        "state": "filtered",
+        "smb": false
+      },
+      "445": {
+        "protocol": "tcp",
+        "state": "filtered",
+        "smb": false
+      },
+      "139": {
+        "protocol": "tcp",
+        "state": "filtered",
+        "smb": false
+      },
+      "443": {
+        "protocol": "udp",
+        "state": "open|filtered",
+        "quic": false
+      },
+      "137": {
+        "protocol": "udp",
+        "state": "open|filtered"
+      },
+      "138": {
+        "protocol": "udp",
+        "state": "open|filtered"
+      }
+    },
+    "smb_inferred": false,
+    "nbns": false
+  },
+  "76.223.33.104": {
+    "host": "76.223.33.104",
+    "ports": {
+      "135": {
+        "protocol": "tcp",
+        "state": "filtered",
+        "smb": false
+      },
+      "445": {
+        "protocol": "tcp",
+        "state": "filtered",
+        "smb": false
+      },
+      "139": {
+        "protocol": "tcp",
+        "state": "filtered",
+        "smb": false
+      },
+      "443": {
+        "protocol": "udp",
+        "state": "open|filtered",
+        "quic": false
+      },
+      "137": {
+        "protocol": "udp",
+        "state": "open|filtered"
+      },
+      "138": {
+        "protocol": "udp",
+        "state": "open|filtered"
+      }
+    },
+    "smb_inferred": false,
+    "nbns": false
+  }
+}
