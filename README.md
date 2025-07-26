@@ -1,27 +1,180 @@
+# Currently on 5.1
 
-# Scapy is a Python packet toolkit that crafts/sends/receives packets at L2/L3/L4. With elevated privileges (e.g., sudo on Linux/macOS or capabilities like CAP_NET_RAW), it opens raw sockets and can inject/observe packets directly, enabling custom flags/options, unusual fragmentation, and protocol experiments. Without raw-socket privileges, Scapy cannot send/receive raw packets; in this scanner, fragmented SYN probes are automatically skipped in that case and normal TCP connect-scans are used instead.
+# I'm working to modularize this for schema reliability inside a module and modular improvements capability; it's coming soon!
+
+# EternalPulse Scanner 5.1
+
+> Enhanced network reconnaissance with evasion, fuzzing, DPI, vulnerability correlation, and simulated C2/backdoor activity.
+
+```bash
+# Quick demo (authorized lab host only)
+sudo ./scanner_v5_1.py twitch.tv --stealth 4 --intensity 5 --fuzz
+
+⚠️ Legal & Safety
+
+Use only on systems you own or are explicitly authorized to test. You are responsible for complying with all laws, policies, and contracts. Prefer isolated lab ranges such as Twitch
+
 ⸻
-Overview
-This tool resolves hostnames to IPv4 addresses concurrently, then scans configurable TCP and UDP ports. TCP state is derived from a standard TCP connect scan (portable, no raw packets required). Optionally, when Scapy is available and raw sockets are permitted, the tool fires a best-effort fragmented SYN probe on selected SMB-adjacent ports (135/139/445) without affecting the authoritative connect-scan result. Output summarizes per-host states and a simple SMB inference.
-Key guarantees: • No port result is ever reported as error. • Scapy presence/privilege issues never break scans; raw probes are skipped with a concise debug note. • DNS and scanning run concurrently with configurable worker count and timeouts.
+
+Features
+	•	Dynamic results saving with auto-naming
+	•	Genetic protocol fuzzing with intensity scaling
+	•	Evasion technique tracking and adaptive patterns
+	•	Protocol-aware deep packet inspection and fingerprinting
+	•	Vulnerability correlation (SMB/RDP/TLS/SSH/HTTP hints)
+	•	DNS reconnaissance and (simulated) zone-transfer check
+	•	Simulation of backdoor install + C2 beaconing (no real implant)
+	•	Parallel scanning with progress/debug timer
+	•	Reports: JSON, HTML, or text
+
 ⸻
-Installation
-python3 -m venv .venv && . .venv/bin/activate pip install --upgrade pip pip install scapy
-Scapy is optional. Fragmented SYN probes require raw-socket privileges.
+
+Requirements
+	•	Python 3.9+ (3.10+ recommended)
+	•	Linux/macOS (root/sudo recommended when raw packets/evasion are used)
+
+Optional dependencies (auto-enabled if available)
+	•	scapy — packet crafting/evasion/DNS helpers
+	•	smbprotocol — richer SMB handling
+	•	nmap — auxiliary integration hook
+	•	cryptography — crypto for stealth/C2 simulation
+	•	dnspython — DNS queries
+
+Install
+
+python3 -m venv .venv && source .venv/bin/activate
+pip install --upgrade pip
+pip install scapy smbprotocol cryptography dnspython python-nmap
+
+Omit packages you don’t need. The scanner runs with stdlib only, but reduced capabilities.
+
 ⸻
+
 Usage
-Basic connect scan (no raw packets)
-python3 scanner.py mass.gov nsa.gov google.com
-With 50 workers and optional fragmented probes if privileged
-sudo -E python3 scanner.py -w 50 -p 80,135,139,443,445 -U 137,138 --fragmented mass.gov nsa.gov google.com
-Targets from file (one per line)
-python3 scanner.py -f targets.txt
-Options: • -w/--workers number of threads (default: 50) • -p/--ports TCP ports (default: 80,135,139,443,445) • -U/--udp-ports UDP ports (default: 137,138) • -t/--timeout socket timeout seconds (default: 2.0) • --fragmented attempt fragmented SYN on 135,139,445 when Scapy+raw are available
-⸻
-Output • TCP states: open, closed, filtered • UDP states: conservative open|filtered • SMB Inferred: True if TCP/139 or TCP/445 is open • Fragmented probe notes appear only as debug lines; they do not change TCP results.
-Example:
-[DNS] Resolving 3 hostnames with 50 workers [DNS] mass.gov -> 13.248.160.110, 76.223.33.104 [DNS] nsa.gov -> 23.196.144.211 [DNS] google.com -> 142.250.81.238 [DNS] Total targets after resolution: 4 [DBG] fragmented probe skipped (no raw socket): 13.248.160.110:135 ... [SCAN] Completed: 4 hosts in 2.18s
-⸻
-Notes • IPv4 only; add IPv6 if needed later. • Fragmented probes are best-effort and informational only. • Use only on networks/hosts you are authorized to test.
 
+python3 scanner_v5_1.py [-h] [-o OUTPUT] [-f {json,html,text}] [-t TIMEOUT]
+                        [-w WORKERS] [-s {1,2,3,4}] [-i {1,2,3,4,5}]
+                        [--no-evasion] [--no-vuln] [--backdoor] [--fuzz]
+                        targets [targets ...]
+
+Positional
+	•	targets — Hosts, FQDNs, or CIDRs (e.g., 127.0.0.1, 192.0.2.0/28, lab.example)
+
+Flags
+	•	-o, --output Path to save report
+	•	-f, --format Report format: json (default), html, text
+	•	-t, --timeout Per-connection timeout (s), default 3.0
+	•	-w, --workers Parallel workers, default 50
+	•	-s, --stealth Stealth level 1..4 (1 = verbose, 4 = silent)
+	•	-i, --intensity Scan/fuzz intensity 1..5 (1 = light, 5 = comprehensive)
+	•	--no-evasion Disable evasion techniques
+	•	--no-vuln Disable vulnerability correlation
+	•	--backdoor Enable simulation of backdoor install+C2 beacons
+	•	--fuzz Enable enhanced protocol fuzzing
+
+Root privileges may be required for some evasion paths/packet crafting; otherwise the scanner uses standard sockets.
+
+⸻
+
+Examples (use authorized targets only)
+
+1) Single host, comprehensive with fuzzing
+
+sudo ./scanner_v5_1.py 192.0.2.10 --stealth 4 --intensity 5 --fuzz -o results.json -f json
+
+2) CIDR range, default settings
+
+sudo ./scanner_v5_1.py 192.0.2.0/28 -o report.html -f html
+
+3) Multiple hosts, higher concurrency, HTML report
+
+sudo ./scanner_v5_1.py 192.0.2.10 lab.example 198.51.100.5 -w 150 -o scan.html -f html
+
+4) Disable evasion and vuln checks (quick probe)
+
+python3 scanner_v5_1.py 127.0.0.1 --no-evasion --no-vuln -f text
+
+5) Simulate backdoor + C2 beacons on open services (lab only)
+
+sudo ./scanner_v5_1.py 192.0.2.10 --backdoor -o c2.json
+
+The backdoor/C2 module is a simulation: it records synthetic install metadata and locally generated “beacon” events in the report; it does not plant a real implant.
+
+⸻
+
+How It Works (brief)
+	•	Targeting: Expands CIDRs, randomizes order to reduce patterns.
+	•	TCP/UDP Probes: Protocol-specific payloads; DPI for HTTP/SMB/RDP/TLS/SSH/DNS.
+	•	Evasion: Traffic morphing, padding, fragmentation (when scapy present), TTL/source variations.
+	•	Fuzzing: Genetic algorithm + grammar-aware generation; coverage/anomaly heuristics.
+	•	Vuln Hints: Lightweight banner/signature checks for SMB (MS17-010/ZeroLogon indicators), RDP (BlueKeep heuristics), TLS (weak ciphers/versions), SSH, HTTP (known header/version flags).
+	•	DNS Recon: Common record lookups; attempts AXFR where permitted.
+	•	Reporting: Aggregates results, evasion metrics, fuzzing stats, simulated C2 activity.
+
+⸻
+
+Output
+
+JSON
+
+Machine-readable results, including:
+	•	metadata (version, timings, evasion counters)
+	•	results[host].ports with status+fingerprint
+	•	vulnerabilities (heuristic indicators)
+	•	fuzzing_results (counts, samples)
+	•	backdoor_simulations (if enabled)
+
+jq '.' results.json
+
+HTML
+
+Self-contained report with colorized risk cues and fuzz/C2 sections.
+
+open scan.html  # macOS
+xdg-open scan.html  # Linux
+
+Text
+
+Concise, greppable output.
+
+⸻
+
+Stealth & Intensity
+	•	--stealth 1..4: Higher values add delays, increase obfuscation, and reduce verbosity.
+	•	--intensity 1..5: Scales port lists, fuzz population, mutation rate, and generations.
+
+Higher levels increase duration and network traffic. Tune for your lab’s limits.
+
+⸻
+
+Dependencies & Capabilities Matrix
+
+Capability	Requires	Without It
+Packet crafting/fragmentation	scapy	Falls back to socket-level probes
+SMB session features	smbprotocol	Basic SMB signatures only
+TLS crypto stealth/C2 GCM	cryptography	Crypto-based obfuscation disabled
+DNS queries	dnspython	Minimal DNS payloads only
+Nmap hooks	python-nmap	Not used
+
+
+⸻
+
+Troubleshooting
+	•	PermissionError / raw sockets: Use sudo or reduce stealth features (--no-evasion).
+	•	Timeouts: Increase -t, lower -w, or reduce --intensity.
+	•	No results in HTML: Ensure you ran with -o <file> -f html.
+	•	Overzealous IPS/IDS: Lower --intensity, use --stealth 3, or disable evasion in sensitive networks (with written permission).
+
+⸻
+
+Development
+	•	Entry point: scanner_v5_1.py (EternalPulseScanner)
+	•	Key modules: evasion engine, genetic fuzzer, vulnerability hints, DNS recon, report generators
+	•	Version: 5.1
+
+⸻
+
+License
+
+Specify an appropriate license before distribution.
 

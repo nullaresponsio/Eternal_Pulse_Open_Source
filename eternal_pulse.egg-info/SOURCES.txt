@@ -1,9 +1,0 @@
-LICENSE
-README.md
-setup.py
-eternal_pulse.egg-info/PKG-INFO
-eternal_pulse.egg-info/SOURCES.txt
-eternal_pulse.egg-info/dependency_links.txt
-eternal_pulse.egg-info/entry_points.txt
-eternal_pulse.egg-info/requires.txt
-eternal_pulse.egg-info/top_level.txt

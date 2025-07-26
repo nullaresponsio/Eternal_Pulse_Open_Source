@@ -1,1 +1,0 @@
-provide code in full; i want to print to debug only all useful information that could help me find vulnerabilities for remote execution or help me design and build ones:

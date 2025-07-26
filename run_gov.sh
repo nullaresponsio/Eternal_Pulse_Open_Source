@@ -1,1 +1,0 @@
-python3.13 __main__.py --input targets.txt --save results_nsa.json

@@ -1,1 +1,0 @@
-python3.13 safe_scan.py --input targets.txt --save results_nsa.json --http-probe --json
