@@ -2,30 +2,35 @@
   "13.248.160.110": {
     "host": "13.248.160.110",
     "ports": {
-      "135": {
+      "443": {
         "protocol": "tcp",
-        "state": "error",
-        "smb": false
+        "state": "open",
+        "smb": false,
+        "vulnerable": false
       },
       "80": {
         "protocol": "tcp",
         "state": "open",
-        "smb": false
-      },
-      "445": {
-        "protocol": "tcp",
-        "state": "error",
-        "smb": false
-      },
-      "443": {
-        "protocol": "tcp",
-        "state": "open",
-        "smb": false
+        "smb": false,
+        "vulnerable": false
       },
       "139": {
         "protocol": "tcp",
-        "state": "error",
-        "smb": false
+        "state": "filtered",
+        "smb": false,
+        "vulnerable": false
+      },
+      "445": {
+        "protocol": "tcp",
+        "state": "filtered",
+        "smb": false,
+        "vulnerable": false
+      },
+      "135": {
+        "protocol": "tcp",
+        "state": "filtered",
+        "smb": false,
+        "vulnerable": false
       },
       "138": {
         "protocol": "udp",
@@ -36,36 +41,40 @@
         "state": "open|filtered"
       }
     },
-    "smb_inferred": false,
-    "nbns": false
+    "smb_inferred": false
   },
   "76.223.33.104": {
     "host": "76.223.33.104",
     "ports": {
-      "135": {
+      "443": {
         "protocol": "tcp",
-        "state": "error",
-        "smb": false
+        "state": "open",
+        "smb": false,
+        "vulnerable": false
       },
       "80": {
         "protocol": "tcp",
         "state": "open",
-        "smb": false
-      },
-      "445": {
-        "protocol": "tcp",
-        "state": "error",
-        "smb": false
-      },
-      "443": {
-        "protocol": "tcp",
-        "state": "open",
-        "smb": false
+        "smb": false,
+        "vulnerable": false
       },
       "139": {
         "protocol": "tcp",
-        "state": "error",
-        "smb": false
+        "state": "filtered",
+        "smb": false,
+        "vulnerable": false
+      },
+      "445": {
+        "protocol": "tcp",
+        "state": "filtered",
+        "smb": false,
+        "vulnerable": false
+      },
+      "135": {
+        "protocol": "tcp",
+        "state": "filtered",
+        "smb": false,
+        "vulnerable": false
       },
       "138": {
         "protocol": "udp",
@@ -76,36 +85,40 @@
         "state": "open|filtered"
       }
     },
-    "smb_inferred": false,
-    "nbns": false
+    "smb_inferred": false
   },
-  "142.250.81.238": {
-    "host": "142.250.81.238",
+  "142.251.40.142": {
+    "host": "142.251.40.142",
     "ports": {
-      "135": {
+      "443": {
         "protocol": "tcp",
-        "state": "error",
-        "smb": false
+        "state": "open",
+        "smb": false,
+        "vulnerable": false
       },
       "80": {
         "protocol": "tcp",
         "state": "open",
-        "smb": false
-      },
-      "445": {
-        "protocol": "tcp",
-        "state": "error",
-        "smb": false
-      },
-      "443": {
-        "protocol": "tcp",
-        "state": "open",
-        "smb": false
+        "smb": false,
+        "vulnerable": false
       },
       "139": {
         "protocol": "tcp",
-        "state": "error",
-        "smb": false
+        "state": "filtered",
+        "smb": false,
+        "vulnerable": false
+      },
+      "445": {
+        "protocol": "tcp",
+        "state": "filtered",
+        "smb": false,
+        "vulnerable": false
+      },
+      "135": {
+        "protocol": "tcp",
+        "state": "filtered",
+        "smb": false,
+        "vulnerable": false
       },
       "138": {
         "protocol": "udp",
@@ -116,36 +129,40 @@
         "state": "open|filtered"
       }
     },
-    "smb_inferred": false,
-    "nbns": false
+    "smb_inferred": false
   },
-  "23.196.144.211": {
-    "host": "23.196.144.211",
+  "23.221.109.153": {
+    "host": "23.221.109.153",
     "ports": {
-      "135": {
+      "443": {
         "protocol": "tcp",
-        "state": "error",
-        "smb": false
+        "state": "open",
+        "smb": false,
+        "vulnerable": false
       },
       "80": {
         "protocol": "tcp",
         "state": "open",
-        "smb": false
-      },
-      "445": {
-        "protocol": "tcp",
-        "state": "error",
-        "smb": false
-      },
-      "443": {
-        "protocol": "tcp",
-        "state": "open",
-        "smb": false
+        "smb": false,
+        "vulnerable": false
       },
       "139": {
         "protocol": "tcp",
-        "state": "error",
-        "smb": false
+        "state": "filtered",
+        "smb": false,
+        "vulnerable": false
+      },
+      "445": {
+        "protocol": "tcp",
+        "state": "filtered",
+        "smb": false,
+        "vulnerable": false
+      },
+      "135": {
+        "protocol": "tcp",
+        "state": "filtered",
+        "smb": false,
+        "vulnerable": false
       },
       "138": {
         "protocol": "udp",
@@ -156,7 +173,6 @@
         "state": "open|filtered"
       }
     },
-    "smb_inferred": false,
-    "nbns": false
+    "smb_inferred": false
   }
 }
