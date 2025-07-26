@@ -1,1 +1,1 @@
-python3.13 __main__.py --input targets_small.txt --save results_nsa.json
+sudo python3.13 __main__.py --input targets_small.txt --save results_nsa.json

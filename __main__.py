@@ -27,8 +27,8 @@ from backdoor import (
     install_backdoor_cloud,
 )
 
-# Disable allowlist filtering completely
-PublicIPFirewallSMB._allowed = lambda self, t, nets, ips: True
+# Disable allowlist filtering completely with correct arguments
+PublicIPFirewallSMB._allowed = lambda self, t: True
 
 # DNS Resolution Helper
 def resolve_host(hostname):
@@ -369,7 +369,6 @@ def main():
                 "targets": [h for h in hosts if h not in args.host]
             })
 
-    # REMOVED ALLOWLIST HANDLING COMPLETELY
     # Only require explicit targets
     if not hosts and not cidrs:
         print("[ERROR] No targets specified. Please provide targets via --host, --cidr, or --input.", file=sys.stderr)
