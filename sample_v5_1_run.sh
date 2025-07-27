@@ -1,1 +1,0 @@
-sudo ./scanner.py twitch.tv --stealth 4 --intensity 5 --fuzz
