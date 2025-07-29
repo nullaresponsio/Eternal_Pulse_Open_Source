@@ -1,3 +1,8 @@
+# You, yes you, may have a lot of hubris given how if DeepSeek R1 Heavy is used to loop this then mass.gov may be gone by the time you wake up. 
+
+Obviously human supervision is always required to optimally use LLMs as they only resemble capability for thought.
+
+
 # Placeholder README
 
 Based on analysis of SMB protocol architecture, historical vulnerabilities, and the provided quantum exploitation script, below is a technical breakdown of potential undiscovered vulnerabilities and intelligent exploitation paths for SMBv2/v3 protocols, along with strategic enhancements to the scanner for zero-day discovery:
