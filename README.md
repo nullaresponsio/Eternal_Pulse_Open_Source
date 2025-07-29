@@ -2,6 +2,11 @@
 
 Obviously human supervision is always required to optimally use LLMs as they only resemble capability for thought.
 
+# Instructions
+
+You take the known vulnerabilites of smb and exploit the shit out of it.
+
+![GxDq7zwWAAAA9dW](https://github.com/user-attachments/assets/71c78686-cf27-4bf9-993b-7fa1e9575a83)
 
 # Placeholder README
 
