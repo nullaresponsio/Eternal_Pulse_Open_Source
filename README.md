@@ -8,6 +8,11 @@ You take the known vulnerabilites of smb and exploit the shit out of it.
 
 ![GxDq7zwWAAAA9dW](https://github.com/user-attachments/assets/71c78686-cf27-4bf9-993b-7fa1e9575a83)
 
+
+# Skeleton starter code run, probing mass.gov. You can try to see if a DeepSeek R1 Heavy loop results in mass.gov going down, or better yet learn what's going on for real
+
+<img width="912" height="1003" alt="Screenshot 2025-07-29 at 7 13 16 PM" src="https://github.com/user-attachments/assets/9cfe3aa2-6e05-4a27-a461-e784898d1a66" />
+
 # Placeholder README
 
 Based on analysis of SMB protocol architecture, historical vulnerabilities, and the provided quantum exploitation script, below is a technical breakdown of potential undiscovered vulnerabilities and intelligent exploitation paths for SMBv2/v3 protocols, along with strategic enhancements to the scanner for zero-day discovery:
