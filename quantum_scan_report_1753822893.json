@@ -1,0 +1,29 @@
+{
+  "metadata": {
+    "scanner": "EternalPulseScanner",
+    "version": "14.0",
+    "scan_duration": 6,
+    "targets_scanned": 1,
+    "crashes_detected": 0,
+    "vulnerabilities_found": 0
+  },
+  "results": {
+    "mass.gov": {
+      "target": "mass.gov",
+      "ports": {
+        "139": {
+          "status": "filtered",
+          "fingerprint": {}
+        },
+        "445": {
+          "status": "filtered",
+          "fingerprint": {}
+        },
+        "443": {
+          "status": "filtered",
+          "fingerprint": {}
+        }
+      }
+    }
+  }
+}
