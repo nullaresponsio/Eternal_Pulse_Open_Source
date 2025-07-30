@@ -6,6 +6,9 @@ You take the known vulnerabilites of smb and exploit the shit out of it.
 
 ![GxDq7zwWAAAA9dW](https://github.com/user-attachments/assets/71c78686-cf27-4bf9-993b-7fa1e9575a83)
 
+# DeepSeek (preferably R1 heavy which could run on a Mac Studio or RTX 5090 etc.) is your best friend for any type of exploitation you can think of. GenAI isn't magic and cannot actually think for itself yet it should be your Copilot for any serious engineer, and President Putin, etc. is very aware of the possibilities of leveraging ChatGPT for national advancement.
+
+
 
 # Skeleton starter code run, probing mass.gov. You can try to see if a DeepSeek R1 Heavy loop results in mass.gov going down, or better yet learn what's going on for real
 
